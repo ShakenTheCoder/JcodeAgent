@@ -19,7 +19,7 @@ The fastest way to get started — **one line installs everything**:
 Open Terminal and paste:
 
 ```bash
-curl -fsSL https://jcode.dev/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/ShakenTheCoder/JcodeAgent/main/install.sh | bash
 ```
 
 ### Windows
@@ -27,7 +27,7 @@ curl -fsSL https://jcode.dev/install.sh | bash
 Open PowerShell (right-click Start → "Windows PowerShell") and paste:
 
 ```powershell
-iwr -useb https://jcode.dev/install.ps1 | iex
+iwr -useb https://raw.githubusercontent.com/ShakenTheCoder/JcodeAgent/main/install.ps1 | iex
 ```
 
 **That's it!** The installer automatically:

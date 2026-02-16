@@ -41,12 +41,12 @@ JCode uses **4 AI roles** (same local models, different specialised prompts) to 
 
 **Mac / Linux:**
 ```bash
-curl -fsSL https://jcode.dev/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/ShakenTheCoder/JcodeAgent/main/install.sh | bash
 ```
 
 **Windows (PowerShell):**
 ```powershell
-iwr -useb https://jcode.dev/install.ps1 | iex
+iwr -useb https://raw.githubusercontent.com/ShakenTheCoder/JcodeAgent/main/install.ps1 | iex
 ```
 
 Installs Python, Ollama, AI models, and JCode — only what's missing. Then just run `jcode`.

@@ -438,14 +438,14 @@
         <div id="tab-mac" class="install-panel active">
             <div class="install-box">
                 <div class="label">Install with one command</div>
-                <code>curl -fsSL https://jcode.dev/install.sh | bash</code>
+                <code>curl -fsSL https://raw.githubusercontent.com/ShakenTheCoder/JcodeAgent/main/install.sh | bash</code>
                 <button class="copy-btn" onclick="copyInstall('mac')">Copy</button>
             </div>
         </div>
         <div id="tab-win" class="install-panel">
             <div class="install-box">
                 <div class="label">Install with one command</div>
-                <code>iwr -useb https://jcode.dev/install.ps1 | iex</code>
+                <code>iwr -useb https://raw.githubusercontent.com/ShakenTheCoder/JcodeAgent/main/install.ps1 | iex</code>
                 <button class="copy-btn" onclick="copyInstall('win')">Copy</button>
             </div>
         </div>
@@ -664,8 +664,8 @@
 
     function copyInstall(os) {
         const commands = {
-            mac: 'curl -fsSL https://jcode.dev/install.sh | bash',
-            win: 'iwr -useb https://jcode.dev/install.ps1 | iex'
+            mac: 'curl -fsSL https://raw.githubusercontent.com/ShakenTheCoder/JcodeAgent/main/install.sh | bash',
+            win: 'iwr -useb https://raw.githubusercontent.com/ShakenTheCoder/JcodeAgent/main/install.ps1 | iex'
         };
         navigator.clipboard.writeText(commands[os]).then(() => {
             const btn = event.target;

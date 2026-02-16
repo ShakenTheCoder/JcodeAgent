@@ -18,7 +18,7 @@ $ErrorActionPreference = "Stop"
 
 # ── Config ─────────────────────────────────────────────────────────
 $JCODE_HOME  = if ($env:JCODE_HOME) { $env:JCODE_HOME } else { Join-Path $env:USERPROFILE "JcodeAgent" }
-$JCODE_REPO  = "https://github.com/YOUR_USERNAME/JcodeAgent.git"  # ← Update this
+$JCODE_REPO  = "https://github.com/ShakenTheCoder/JcodeAgent.git"
 $MIN_PYTHON  = [version]"3.10"
 $MODELS      = @("deepseek-r1:14b", "qwen2.5-coder:14b")
 $PYTHON_CMD  = ""
