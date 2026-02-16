@@ -144,11 +144,40 @@ class ProjectState:
 
 # ── Complexity Detection ───────────────────────────────────────────
 
-def detect_complexity(plan: dict) -> str:
-    """Auto-detect project complexity from plan structure."""
+def detect_complexity(plan) -> str:
+    """Auto-detect project complexity from plan structure.
+
+    Accepts either a dict (plan) or a string (prompt).
+    When called with a string prompt (before planning), returns a
+    keyword-based estimate.  When called with the full plan dict,
+    uses structural analysis.
+    """
     if not plan:
         return "medium"
 
+    # ── String prompt (pre-plan estimate) ──────────────────────────
+    if isinstance(plan, str):
+        prompt_lower = plan.lower()
+        score = 0
+        if any(kw in prompt_lower for kw in ("sql", "database", "postgres", "mongo", "redis")):
+            score += 1
+        if any(kw in prompt_lower for kw in ("api", "rest", "graphql", "grpc")):
+            score += 1
+        if any(kw in prompt_lower for kw in ("auth", "jwt", "oauth", "login")):
+            score += 1
+        if any(kw in prompt_lower for kw in ("docker", "ci", "deploy", "kubernetes")):
+            score += 1
+        if any(kw in prompt_lower for kw in ("test", "pytest", "jest")):
+            score += 1
+        if len(prompt_lower.split()) > 40:
+            score += 1
+        if score <= 1:
+            return "simple"
+        elif score <= 3:
+            return "medium"
+        return "complex"
+
+    # ── Dict plan (full structural analysis) ───────────────────────
     file_count = len(plan.get("structure", {}))
     tech_lower = " ".join(t.lower() for t in plan.get("tech_stack", []))
 

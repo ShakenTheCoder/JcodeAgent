@@ -54,9 +54,9 @@ def execute_plan(ctx: ContextManager, output_dir: Path) -> bool:
 
     console.print(Panel(
         f"[bold]Executing {len(dag)} task(s) via DAG pipeline[/bold]\n"
-        f"[dim]Pipeline: Generate → Review → Verify → Fix[/dim]",
-        title="⚡ JCode Engine v2",
-        border_style="green",
+        f"[dim]Pipeline: Generate > Review > Verify > Fix[/dim]",
+        title="JCode Engine v2",
+        border_style="cyan",
     ))
 
     # ── DAG execution loop ─────────────────────────────────────────
@@ -70,11 +70,11 @@ def execute_plan(ctx: ContextManager, output_dir: Path) -> bool:
             # Deadlock — no tasks can proceed
             pending = [t for t in dag if not t.is_terminal]
             if pending:
-                console.print("[yellow]⚠ No ready tasks — possible dependency deadlock.[/yellow]")
+                console.print("[dim]No ready tasks — possible dependency deadlock.[/dim]")
                 # Force-skip blocked tasks
                 for t in pending:
                     t.status = TaskStatus.SKIPPED
-                    console.print(f"  ⏭️  Skipped task {t.id}: {t.file}")
+                    console.print(f"  Skipped task {t.id}: {t.file}")
             break
 
         for task_node in ready:
@@ -98,11 +98,11 @@ def execute_plan(ctx: ContextManager, output_dir: Path) -> bool:
 
     console.print(Panel(
         f"[bold]Results[/bold]\n"
-        f"  ✅ Verified: {verified}\n"
-        f"  ❌ Failed:   {failed}\n"
-        f"  ⏭️  Skipped:  {skipped}\n"
-        f"  🔄 Iterations used: {global_iteration}",
-        title="📊 Summary",
+        f"  Verified: {verified}\n"
+        f"  Failed:   {failed}\n"
+        f"  Skipped:  {skipped}\n"
+        f"  Iterations used: {global_iteration}",
+        title="Summary",
         border_style="cyan",
     ))
 
@@ -164,7 +164,7 @@ def _process_task(task_node, ctx: ContextManager, output_dir: Path) -> None:
 
     if verification.passed:
         task_node.status = TaskStatus.VERIFIED
-        console.print(f"  [green]✅ Task {task_node.id} verified[/green]")
+        console.print(f"  [cyan]Task {task_node.id} verified[/cyan]")
         return
 
     # ── Step 4: Fix loop (Analyze → Patch → Verify) ───────────────
@@ -200,7 +200,7 @@ def _process_task(task_node, ctx: ContextManager, output_dir: Path) -> None:
         verification = verify_file(file_path, output_dir)
         if verification.passed:
             task_node.status = TaskStatus.VERIFIED
-            console.print(f"  [green]✅ Task {task_node.id} verified after {task_node.failure_count} fix(es)[/green]")
+            console.print(f"  [cyan]Task {task_node.id} verified after {task_node.failure_count} fix(es)[/cyan]")
             return
 
     # Exhausted fix attempts — escalate
@@ -216,14 +216,14 @@ def _escalate_failed_task(task_node, ctx: ContextManager, output_dir: Path) -> N
         f"[bold red]Task {task_node.id} failed after {MAX_TASK_FAILURES} attempts[/bold red]\n"
         f"File: [cyan]{task_node.file}[/cyan]\n"
         f"Last error: [dim]{task_node.error_summary[:200]}[/dim]",
-        title="⚠️ Escalation Required",
+        title="Escalation Required",
         border_style="red",
     ))
 
-    console.print("  [cyan]1[/cyan]  🔄 Re-generate from scratch (fresh attempt, no patches)")
-    console.print("  [cyan]2[/cyan]  📝 Simplify (reduce task scope, try again)")
-    console.print("  [cyan]3[/cyan]  ⏭️  Skip this task and continue")
-    console.print("  [cyan]4[/cyan]  ⏸️  Pause — let me look at the error")
+    console.print("  [cyan]1[/cyan]  Re-generate from scratch (fresh attempt, no patches)")
+    console.print("  [cyan]2[/cyan]  Simplify (reduce task scope, try again)")
+    console.print("  [cyan]3[/cyan]  Skip this task and continue")
+    console.print("  [cyan]4[/cyan]  Pause — let me look at the error")
     console.print()
 
     choice = Prompt.ask("Choose", choices=["1", "2", "3", "4"], default="1")
@@ -234,7 +234,7 @@ def _escalate_failed_task(task_node, ctx: ContextManager, output_dir: Path) -> N
         _escalate_simplify(task_node, ctx, output_dir)
     elif choice == "3":
         task_node.status = TaskStatus.SKIPPED
-        console.print(f"  [yellow]⏭️  Skipped task {task_node.id}: {task_node.file}[/yellow]")
+        console.print(f"  [dim]Skipped task {task_node.id}: {task_node.file}[/dim]")
     elif choice == "4":
         _escalate_pause(task_node, ctx, output_dir)
 
@@ -266,10 +266,10 @@ def _escalate_regenerate(task_node, ctx: ContextManager, output_dir: Path) -> No
 
     if verification.passed:
         task_node.status = TaskStatus.VERIFIED
-        console.print(f"  [green]✅ Task {task_node.id} verified on re-generation![/green]")
+        console.print(f"  [cyan]Task {task_node.id} verified on re-generation[/cyan]")
     else:
         task_node.status = TaskStatus.FAILED
-        console.print(f"  [red]❌ Re-generation also failed. Task marked as FAILED.[/red]")
+        console.print(f"  [dim]Re-generation also failed. Task marked as FAILED.[/dim]")
         console.print(f"  [dim]{verification.summary[:200]}[/dim]")
 
 
@@ -304,10 +304,10 @@ def _escalate_simplify(task_node, ctx: ContextManager, output_dir: Path) -> None
 
     if verification.passed:
         task_node.status = TaskStatus.VERIFIED
-        console.print(f"  [green]✅ Task {task_node.id} verified with simplified version![/green]")
+        console.print(f"  [cyan]Task {task_node.id} verified with simplified version[/cyan]")
     else:
         task_node.status = TaskStatus.FAILED
-        console.print(f"  [red]❌ Simplified version also failed. Task marked as FAILED.[/red]")
+        console.print(f"  [dim]Simplified version also failed. Task marked as FAILED.[/dim]")
         console.print(f"  [dim]{verification.summary[:200]}[/dim]")
 
 
@@ -320,7 +320,7 @@ def _escalate_pause(task_node, ctx: ContextManager, output_dir: Path) -> None:
         f"[bold]Error:[/bold]\n{task_node.error_summary[:500]}\n\n"
         f"[bold]File location:[/bold] {file_path}\n\n"
         f"[dim]You can edit the file manually and then choose an option below.[/dim]",
-        title="⏸️ Paused",
+        title="Paused",
         border_style="yellow",
     ))
 
@@ -335,10 +335,10 @@ def _escalate_pause(task_node, ctx: ContextManager, output_dir: Path) -> None:
         verification = verify_file(file_path, output_dir)
         if verification.passed:
             task_node.status = TaskStatus.VERIFIED
-            console.print(f"  [green]✅ Task {task_node.id} verified after manual edit![/green]")
+            console.print(f"  [cyan]Task {task_node.id} verified after manual edit[/cyan]")
         else:
             task_node.status = TaskStatus.FAILED
-            console.print(f"  [red]❌ Still failing: {verification.summary[:200]}[/red]")
+            console.print(f"  [dim]Still failing: {verification.summary[:200]}[/dim]")
 
     elif choice == "2":
         guidance = Prompt.ask("What should the AI fix?")
@@ -356,37 +356,37 @@ def _escalate_pause(task_node, ctx: ContextManager, output_dir: Path) -> None:
         verification = verify_file(file_path, output_dir)
         if verification.passed:
             task_node.status = TaskStatus.VERIFIED
-            console.print(f"  [green]✅ Task {task_node.id} verified with user guidance![/green]")
+            console.print(f"  [cyan]Task {task_node.id} verified with user guidance[/cyan]")
         else:
             task_node.status = TaskStatus.FAILED
-            console.print(f"  [red]❌ Still failing. Task marked as FAILED.[/red]")
+            console.print(f"  [dim]Still failing. Task marked as FAILED.[/dim]")
             console.print(f"  [dim]{verification.summary[:200]}[/dim]")
 
     elif choice == "3":
         task_node.status = TaskStatus.SKIPPED
-        console.print(f"  [yellow]⏭️  Skipped task {task_node.id}[/yellow]")
+        console.print(f"  [dim]Skipped task {task_node.id}[/dim]")
 
 
 def _show_task_progress(ctx: ContextManager) -> None:
     """Show a compact task status table."""
     dag = ctx.get_task_dag()
     table = Table(show_header=False, box=None, padding=(0, 1))
-    table.add_column("Status", width=3)
+    table.add_column("Status", width=12)
     table.add_column("Task")
     table.add_column("File", style="cyan")
 
     for t in dag:
-        icon = {
-            TaskStatus.PENDING: "⬜",
-            TaskStatus.IN_PROGRESS: "🔄",
-            TaskStatus.GENERATED: "📝",
-            TaskStatus.REVIEWING: "🔍",
-            TaskStatus.NEEDS_FIX: "🔧",
-            TaskStatus.VERIFIED: "✅",
-            TaskStatus.FAILED: "❌",
-            TaskStatus.SKIPPED: "⏭️",
-        }.get(t.status, "❓")
-        table.add_row(icon, f"Task {t.id}", t.file)
+        label = {
+            TaskStatus.PENDING: "[dim]pending[/dim]",
+            TaskStatus.IN_PROGRESS: "[white]working[/white]",
+            TaskStatus.GENERATED: "[white]generated[/white]",
+            TaskStatus.REVIEWING: "[white]reviewing[/white]",
+            TaskStatus.NEEDS_FIX: "[white]fixing[/white]",
+            TaskStatus.VERIFIED: "[cyan]verified[/cyan]",
+            TaskStatus.FAILED: "[red]failed[/red]",
+            TaskStatus.SKIPPED: "[dim]skipped[/dim]",
+        }.get(t.status, "[dim]?[/dim]")
+        table.add_row(label, f"Task {t.id}", t.file)
 
     console.print(table)
 

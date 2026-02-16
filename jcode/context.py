@@ -31,8 +31,8 @@ class ContextManager:
     6. Conversation history per role (planner, coder)
     """
 
-    def __init__(self) -> None:
-        self.state = ProjectState()
+    def __init__(self, state: ProjectState | None = None) -> None:
+        self.state = state or ProjectState()
         self.planner_history: list[dict[str, str]] = []
         self.coder_history: list[dict[str, str]] = []
         self.reviewer_history: list[dict[str, str]] = []
@@ -267,10 +267,11 @@ class ContextManager:
         }
         path.write_text(json.dumps(data, indent=2))
 
-    def load_session(self, path: Path) -> None:
+    @classmethod
+    def load_session(cls, path: Path) -> "ContextManager":
         data = json.loads(path.read_text())
         s = data["state"]
-        self.state = ProjectState(
+        state = ProjectState(
             name=s["name"],
             description=s["description"],
             tech_stack=s["tech_stack"],
@@ -289,7 +290,9 @@ class ContextManager:
             failure_log=s.get("failure_log", []),
             task_nodes=s.get("task_nodes", []),
         )
+        ctx = cls(state)
         # Rebuild DAG
-        self._task_dag = [TaskNode.from_dict(d) for d in s.get("task_nodes", [])]
-        self.planner_history = data.get("planner_history", [])
-        self.coder_history = data.get("coder_history", [])
+        ctx._task_dag = [TaskNode.from_dict(d) for d in s.get("task_nodes", [])]
+        ctx.planner_history = data.get("planner_history", [])
+        ctx.coder_history = data.get("coder_history", [])
+        return ctx
