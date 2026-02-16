@@ -233,7 +233,7 @@ Ollama starts automatically. Just make sure you see the llama icon in your syste
 jcode
 ```
 
-You should see:
+You should see the JCode banner followed by an **interactive launcher**:
 
 ```
      ╦╔═╗╔═╗╔╦╗╔═╗
@@ -243,7 +243,16 @@ You should see:
   Local AI Coding Agent
   🧠 Planner  · 💻 Coder
   🔍 Reviewer · 🔬 Analyzer
+
+  What would you like to do?
+
+    1 · 🆕  Start a new project
+    2 · 📂  Continue a previous project
+    3 · 📥  Import an existing project
+    4 · ⏭️   Skip (go to prompt)
 ```
+
+Just type the number of your choice and press Enter!
 
 **Congratulations! JCode is running!** 🎉
 
@@ -251,15 +260,32 @@ You should see:
 
 ## Step 8: Create Your First Project
 
-### Example: Build a Todo List Web App
+### Option 1: Use the Interactive Launcher (Easiest)
 
-At the `jcode>` prompt, type:
+When JCode starts, choose **1 · Start a new project**.
+
+It will ask you:
+1. **Where to save the project** — just press Enter for the default location, or type a path
+2. **What to build** — describe your idea in plain English
+3. **Clone from GitHub?** — if you have an existing repo, paste the URL; otherwise just say no
+
+### Option 2: From a GitHub Repository
+
+Choose **3 · Import an existing project** from the launcher. You can:
+- Paste a **GitHub URL** (e.g. `https://github.com/user/repo`) and JCode will clone it
+- Or type a **local path** to a project folder on your computer
+
+### Option 3: At the `jcode>` Prompt
+
+If you chose option 4 (skip) at the launcher, type at the prompt:
 
 ```
 build a simple todo list web app with a nice interface
 ```
 
-Press Enter and watch the magic happen:
+### Example: Build a Todo List Web App
+
+Describe your idea and watch the magic happen:
 
 1. 🧠 **Planner** figures out what files you need
 2. 💻 **Coder** writes the code
@@ -268,6 +294,15 @@ Press Enter and watch the magic happen:
 5. 🔬 **Analyzer** fixes any issues
 
 After a few minutes, you'll have a complete project in a new folder!
+
+### What If Something Goes Wrong?
+
+If a task fails 3 times, JCode won't just crash — it will ask you what to do:
+
+- **🔄 Re-generate** — try from scratch with a fresh approach
+- **📐 Simplify** — create a minimal version with TODO comments for the hard parts
+- **⏭️ Skip** — move on to the next task
+- **⏸️ Pause** — pause and let you inspect the error, then provide guidance
 
 ### More Example Prompts to Try
 
@@ -300,8 +335,11 @@ Once JCode is running, you can use these commands:
 | `tree` | See all the files JCode created |
 | `projects` | List all your past projects |
 | `resume` | Continue working on your last project |
+| `update` | Check for and install JCode updates |
 | `help` | Show all commands |
 | `quit` | Exit JCode |
+
+**Tip:** You don't have to memorize these — the interactive launcher handles the most common actions for you automatically!
 
 ---
 
@@ -349,11 +387,17 @@ JCode tried to create files in a protected location. When it asks where to save 
 
 ### Code Has Errors
 
-JCode will automatically try to fix errors up to 3 times. If it still doesn't work:
+JCode will automatically try to fix errors up to 3 times. If it still doesn't work, JCode will offer you 4 choices:
 
-1. Type `resume` to continue from where it left off
-2. Try a simpler prompt first
-3. Check that both AI models are fully downloaded
+1. **Re-generate** — try a completely fresh approach
+2. **Simplify** — create a minimal version and mark the tricky parts with TODOs
+3. **Skip** — skip that file and continue with the rest
+4. **Pause** — let you look at the error and give JCode hints
+
+You can also:
+- Type `resume` to continue from where it left off
+- Try a simpler prompt first
+- Check that both AI models are fully downloaded
 
 ---
 

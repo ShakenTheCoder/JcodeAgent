@@ -1,0 +1,679 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>JCode — Local AI Coding Agent</title>
+    <meta name="description" content="Build full projects from a single prompt. 4 AI roles, zero cloud, 100% local. Powered by Ollama.">
+    <style>
+        /* ── Reset & Base ──────────────────────────────────── */
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+        :root {
+            --font-mono: 'SF Mono', 'Fira Code', 'JetBrains Mono', 'Cascadia Code', 'Consolas', monospace;
+            --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            --transition: 0.3s ease;
+        }
+
+        /* ── Dark Theme (default) ──────────────────────────── */
+        [data-theme="dark"] {
+            --bg: #0a0a0a;
+            --bg-card: #111111;
+            --bg-terminal: #0d1117;
+            --text: #e0e0e0;
+            --text-dim: #6b7280;
+            --accent: #22d3ee;
+            --accent-alt: #06b6d4;
+            --border: #1e293b;
+            --glow: rgba(34, 211, 238, 0.15);
+            --cursor: #22d3ee;
+            --prompt: #22d3ee;
+            --success: #4ade80;
+            --warning: #fbbf24;
+            --error: #f87171;
+        }
+
+        /* ── Light Theme ───────────────────────────────────── */
+        [data-theme="light"] {
+            --bg: #fafafa;
+            --bg-card: #ffffff;
+            --bg-terminal: #f1f5f9;
+            --text: #1e293b;
+            --text-dim: #64748b;
+            --accent: #0891b2;
+            --accent-alt: #0e7490;
+            --border: #e2e8f0;
+            --glow: rgba(8, 145, 178, 0.1);
+            --cursor: #0891b2;
+            --prompt: #0891b2;
+            --success: #16a34a;
+            --warning: #d97706;
+            --error: #dc2626;
+        }
+
+        body {
+            font-family: var(--font-mono);
+            background: var(--bg);
+            color: var(--text);
+            line-height: 1.7;
+            transition: background var(--transition), color var(--transition);
+            overflow-x: hidden;
+        }
+
+        a { color: var(--accent); text-decoration: none; }
+        a:hover { text-decoration: underline; }
+
+        /* ── Theme Toggle ──────────────────────────────────── */
+        .theme-toggle {
+            position: fixed;
+            top: 1.5rem;
+            right: 1.5rem;
+            z-index: 100;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 50%;
+            width: 44px;
+            height: 44px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.2rem;
+            transition: all var(--transition);
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+        .theme-toggle:hover {
+            transform: scale(1.1);
+            border-color: var(--accent);
+        }
+
+        /* ── Container ─────────────────────────────────────── */
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 0 2rem;
+        }
+
+        /* ── Nav ───────────────────────────────────────────── */
+        nav {
+            padding: 1.5rem 0;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+        .nav-logo {
+            font-size: 1.3rem;
+            font-weight: 700;
+            color: var(--accent);
+        }
+        .nav-links { display: flex; gap: 1.5rem; }
+        .nav-links a {
+            color: var(--text-dim);
+            font-size: 0.85rem;
+            transition: color var(--transition);
+        }
+        .nav-links a:hover { color: var(--accent); text-decoration: none; }
+
+        /* ── Hero ──────────────────────────────────────────── */
+        .hero {
+            text-align: center;
+            padding: 5rem 0 3rem;
+        }
+        .hero-ascii {
+            color: var(--accent);
+            font-size: clamp(0.7rem, 2.5vw, 1.1rem);
+            line-height: 1.3;
+            margin-bottom: 1.5rem;
+            white-space: pre;
+        }
+        .hero h1 {
+            font-family: var(--font-sans);
+            font-size: clamp(1.8rem, 5vw, 3rem);
+            font-weight: 800;
+            margin-bottom: 1rem;
+            letter-spacing: -0.02em;
+        }
+        .hero h1 .accent { color: var(--accent); }
+        .hero p {
+            color: var(--text-dim);
+            font-size: 1.1rem;
+            max-width: 600px;
+            margin: 0 auto 2.5rem;
+            font-family: var(--font-sans);
+        }
+
+        /* ── Install Box ───────────────────────────────────── */
+        .install-box {
+            background: var(--bg-terminal);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 1.5rem 2rem;
+            margin: 0 auto 1rem;
+            max-width: 650px;
+            position: relative;
+        }
+        .install-box .label {
+            font-size: 0.75rem;
+            color: var(--text-dim);
+            margin-bottom: 0.5rem;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+        }
+        .install-box code {
+            display: block;
+            color: var(--accent);
+            font-size: 0.95rem;
+            word-break: break-all;
+        }
+        .install-box .copy-btn {
+            position: absolute;
+            top: 1rem;
+            right: 1rem;
+            background: var(--border);
+            border: none;
+            color: var(--text-dim);
+            padding: 0.4rem 0.7rem;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 0.75rem;
+            font-family: var(--font-mono);
+            transition: all var(--transition);
+        }
+        .install-box .copy-btn:hover {
+            background: var(--accent);
+            color: var(--bg);
+        }
+        .install-tabs {
+            display: flex;
+            gap: 0;
+            max-width: 650px;
+            margin: 0 auto 0;
+        }
+        .install-tab {
+            padding: 0.5rem 1.2rem;
+            background: transparent;
+            border: 1px solid var(--border);
+            border-bottom: none;
+            color: var(--text-dim);
+            cursor: pointer;
+            font-family: var(--font-mono);
+            font-size: 0.8rem;
+            transition: all var(--transition);
+            border-radius: 8px 8px 0 0;
+        }
+        .install-tab.active {
+            background: var(--bg-terminal);
+            color: var(--accent);
+            border-color: var(--border);
+        }
+        .install-panel { display: none; }
+        .install-panel.active { display: block; }
+
+        /* ── Terminal Demo ─────────────────────────────────── */
+        .terminal {
+            background: var(--bg-terminal);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            overflow: hidden;
+            margin: 3rem auto;
+            max-width: 700px;
+            box-shadow: 0 4px 24px rgba(0,0,0,0.15);
+        }
+        .terminal-bar {
+            background: var(--border);
+            padding: 0.75rem 1rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        .terminal-dot {
+            width: 12px; height: 12px;
+            border-radius: 50%;
+        }
+        .terminal-dot.red { background: #f87171; }
+        .terminal-dot.yellow { background: #fbbf24; }
+        .terminal-dot.green { background: #4ade80; }
+        .terminal-title {
+            margin-left: 0.5rem;
+            color: var(--text-dim);
+            font-size: 0.8rem;
+        }
+        .terminal-body {
+            padding: 1.5rem;
+            font-size: 0.85rem;
+            line-height: 1.6;
+            min-height: 280px;
+        }
+        .terminal-body .prompt { color: var(--prompt); }
+        .terminal-body .cmd { color: var(--text); }
+        .terminal-body .output { color: var(--text-dim); }
+        .terminal-body .ok { color: var(--success); }
+        .terminal-body .role-plan { color: #c084fc; }
+        .terminal-body .role-code { color: var(--accent); }
+        .terminal-body .role-review { color: var(--warning); }
+        .terminal-body .role-verify { color: var(--success); }
+        .terminal-body .typing-cursor {
+            display: inline-block;
+            width: 8px; height: 1.1em;
+            background: var(--cursor);
+            animation: blink 1s step-end infinite;
+            vertical-align: text-bottom;
+        }
+        @keyframes blink { 50% { opacity: 0; } }
+
+        /* ── Section ───────────────────────────────────────── */
+        section {
+            padding: 4rem 0;
+            border-top: 1px solid var(--border);
+        }
+        section h2 {
+            font-family: var(--font-sans);
+            font-size: 1.8rem;
+            font-weight: 700;
+            margin-bottom: 0.5rem;
+        }
+        section h2 .accent { color: var(--accent); }
+        section .subtitle {
+            color: var(--text-dim);
+            margin-bottom: 2.5rem;
+            font-family: var(--font-sans);
+        }
+
+        /* ── Pipeline ──────────────────────────────────────── */
+        .pipeline {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            gap: 1rem;
+        }
+        .pipe-step {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 1.5rem;
+            text-align: center;
+            transition: all var(--transition);
+        }
+        .pipe-step:hover {
+            border-color: var(--accent);
+            box-shadow: 0 0 20px var(--glow);
+            transform: translateY(-2px);
+        }
+        .pipe-step .emoji { font-size: 2rem; margin-bottom: 0.5rem; }
+        .pipe-step h3 {
+            font-size: 0.95rem;
+            margin-bottom: 0.3rem;
+            color: var(--accent);
+        }
+        .pipe-step p {
+            font-size: 0.8rem;
+            color: var(--text-dim);
+            font-family: var(--font-sans);
+        }
+
+        /* ── Features Grid ─────────────────────────────────── */
+        .features {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 1.5rem;
+        }
+        .feature-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 1.5rem;
+            transition: all var(--transition);
+        }
+        .feature-card:hover {
+            border-color: var(--accent);
+            box-shadow: 0 0 20px var(--glow);
+        }
+        .feature-card h3 {
+            font-size: 0.95rem;
+            margin-bottom: 0.5rem;
+            color: var(--accent);
+        }
+        .feature-card p {
+            font-size: 0.85rem;
+            color: var(--text-dim);
+            font-family: var(--font-sans);
+        }
+
+        /* ── Versions / Releases ───────────────────────────── */
+        .releases { list-style: none; }
+        .release-item {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 1.5rem;
+            margin-bottom: 1rem;
+            transition: all var(--transition);
+        }
+        .release-item:hover { border-color: var(--accent); }
+        .release-header {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            margin-bottom: 0.75rem;
+        }
+        .release-tag {
+            background: var(--accent);
+            color: var(--bg);
+            padding: 0.2rem 0.6rem;
+            border-radius: 4px;
+            font-size: 0.8rem;
+            font-weight: 700;
+        }
+        .release-tag.latest {
+            background: var(--success);
+        }
+        .release-date {
+            color: var(--text-dim);
+            font-size: 0.8rem;
+        }
+        .release-title {
+            font-size: 1rem;
+            font-weight: 600;
+        }
+        .release-body {
+            color: var(--text-dim);
+            font-size: 0.85rem;
+            font-family: var(--font-sans);
+            line-height: 1.6;
+        }
+        .release-body ul {
+            padding-left: 1.2rem;
+            margin-top: 0.5rem;
+        }
+
+        /* ── Footer ────────────────────────────────────────── */
+        footer {
+            border-top: 1px solid var(--border);
+            padding: 2rem 0;
+            text-align: center;
+            color: var(--text-dim);
+            font-size: 0.8rem;
+        }
+        footer a { color: var(--accent); }
+
+        /* ── Responsive ────────────────────────────────────── */
+        @media (max-width: 600px) {
+            .container { padding: 0 1rem; }
+            .hero { padding: 3rem 0 2rem; }
+            .nav-links { gap: 0.8rem; }
+            .install-box { padding: 1rem; }
+        }
+    </style>
+</head>
+<body>
+
+<!-- Theme Toggle -->
+<button class="theme-toggle" onclick="toggleTheme()" title="Toggle theme" aria-label="Toggle dark/light theme">🌙</button>
+
+<div class="container">
+
+    <!-- Nav -->
+    <nav>
+        <span class="nav-logo">jcode</span>
+        <div class="nav-links">
+            <a href="#features">Features</a>
+            <a href="#pipeline">How It Works</a>
+            <a href="#releases">Releases</a>
+            <a href="https://github.com/YOUR_USERNAME/JcodeAgent" target="_blank">GitHub</a>
+        </div>
+    </nav>
+
+    <!-- Hero -->
+    <div class="hero">
+        <div class="hero-ascii">     ╦╔═╗╔═╗╔╦╗╔═╗
+     ║║  ║ ║ ║║║╣
+    ╚╝╚═╝╚═╝═╩╝╚═╝</div>
+        <h1>Build projects with <span class="accent">one prompt</span></h1>
+        <p>A local AI coding agent that plans, codes, reviews, and fixes — entirely on your machine. No cloud. No API keys. No subscriptions.</p>
+
+        <!-- Install Tabs -->
+        <div class="install-tabs">
+            <button class="install-tab active" onclick="switchTab('mac')">Mac / Linux</button>
+            <button class="install-tab" onclick="switchTab('win')">Windows</button>
+        </div>
+        <div id="tab-mac" class="install-panel active">
+            <div class="install-box">
+                <div class="label">Install with one command</div>
+                <code>curl -fsSL https://jcode.dev/install.sh | bash</code>
+                <button class="copy-btn" onclick="copyInstall('mac')">Copy</button>
+            </div>
+        </div>
+        <div id="tab-win" class="install-panel">
+            <div class="install-box">
+                <div class="label">Install with one command</div>
+                <code>iwr -useb https://jcode.dev/install.ps1 | iex</code>
+                <button class="copy-btn" onclick="copyInstall('win')">Copy</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Terminal Demo -->
+    <div class="terminal">
+        <div class="terminal-bar">
+            <span class="terminal-dot red"></span>
+            <span class="terminal-dot yellow"></span>
+            <span class="terminal-dot green"></span>
+            <span class="terminal-title">jcode — zsh — 80×24</span>
+        </div>
+        <div class="terminal-body" id="terminal-demo">
+            <div><span class="prompt">$</span> <span class="cmd">jcode</span></div>
+            <div><span class="ok">✔ Ollama connected</span></div>
+            <div>&nbsp;</div>
+            <div><span class="output">What would you like to do?</span></div>
+            <div><span class="ok">  ❯ 🆕 Create a new project</span></div>
+            <div><span class="output">    📂 Continue a project</span></div>
+            <div><span class="output">    📥 Import a project</span></div>
+            <div>&nbsp;</div>
+            <div><span class="prompt">jcode&gt;</span> <span class="cmd">build a REST API with FastAPI and SQLite</span></div>
+            <div>&nbsp;</div>
+            <div><span class="role-plan">🧠 Planner</span> <span class="output">Designing architecture...</span></div>
+            <div><span class="role-plan">   ✔ 6 tasks planned in DAG order</span></div>
+            <div>&nbsp;</div>
+            <div><span class="role-code">💻 Coder</span> <span class="output">Generating main.py...</span></div>
+            <div><span class="role-review">🔍 Reviewer</span> <span class="output">Checking for bugs...</span></div>
+            <div><span class="role-verify">✅ Verified</span> <span class="output">main.py — syntax ✓ lint ✓</span></div>
+            <div>&nbsp;</div>
+            <div><span class="role-code">💻 Coder</span> <span class="output">Generating models.py...</span></div>
+            <div><span class="role-review">🔍 Reviewer</span> <span class="output">Checking for bugs...</span></div>
+            <div><span class="role-verify">✅ Verified</span> <span class="output">models.py — syntax ✓ lint ✓</span></div>
+            <div>&nbsp;</div>
+            <div><span class="ok">🎉 Build complete! 6/6 files verified</span></div>
+            <div><span class="prompt">jcode&gt;</span> <span class="typing-cursor"></span></div>
+        </div>
+    </div>
+
+    <!-- Pipeline -->
+    <section id="pipeline">
+        <h2>How <span class="accent">JCode</span> works</h2>
+        <p class="subtitle">4 specialized AI roles, one local machine, zero cloud dependencies.</p>
+        <div class="pipeline">
+            <div class="pipe-step">
+                <div class="emoji">🧠</div>
+                <h3>Planner</h3>
+                <p>Designs architecture, creates a dependency-ordered task DAG</p>
+            </div>
+            <div class="pipe-step">
+                <div class="emoji">💻</div>
+                <h3>Coder</h3>
+                <p>Generates each file using structured memory, not context dumps</p>
+            </div>
+            <div class="pipe-step">
+                <div class="emoji">🔍</div>
+                <h3>Reviewer</h3>
+                <p>Pre-execution code review catches bugs before they run</p>
+            </div>
+            <div class="pipe-step">
+                <div class="emoji">✅</div>
+                <h3>Verifier</h3>
+                <p>Static analysis: syntax, lint, type checks per file</p>
+            </div>
+            <div class="pipe-step">
+                <div class="emoji">🔬</div>
+                <h3>Analyzer</h3>
+                <p>Diagnoses failures, creates targeted fix strategies</p>
+            </div>
+            <div class="pipe-step">
+                <div class="emoji">🔄</div>
+                <h3>Self-Correct</h3>
+                <p>Patch → re-verify loop with escalation on repeated failure</p>
+            </div>
+        </div>
+    </section>
+
+    <!-- Features -->
+    <section id="features">
+        <h2>Built <span class="accent">different</span></h2>
+        <p class="subtitle">Engineering beats model size.</p>
+        <div class="features">
+            <div class="feature-card">
+                <h3>🔒 100% Local</h3>
+                <p>Everything runs on your machine. Your code never leaves your computer. No API keys, no cloud, no subscriptions.</p>
+            </div>
+            <div class="feature-card">
+                <h3>🌳 DAG Task Tree</h3>
+                <p>Tasks have dependencies. A file isn't generated until its deps are verified. No more broken imports.</p>
+            </div>
+            <div class="feature-card">
+                <h3>🧠 Structured Memory</h3>
+                <p>Each role sees only what it needs — architecture summary, file index, failure log. Not raw context dumps.</p>
+            </div>
+            <div class="feature-card">
+                <h3>🔧 Patch Mode</h3>
+                <p>Fixes are minimal targeted patches, not full file regeneration. Preserves working code.</p>
+            </div>
+            <div class="feature-card">
+                <h3>📦 One-Click Install</h3>
+                <p>Single command installs Python, Ollama, AI models, and JCode. Only installs what's missing.</p>
+            </div>
+            <div class="feature-card">
+                <h3>💾 Save & Resume</h3>
+                <p>Sessions auto-save. Resume any project from where you left off. Switch between projects freely.</p>
+            </div>
+        </div>
+    </section>
+
+    <!-- Releases -->
+    <section id="releases">
+        <h2>Release <span class="accent">history</span></h2>
+        <p class="subtitle">Latest updates and improvements.</p>
+        <ul class="releases">
+            <li class="release-item">
+                <div class="release-header">
+                    <span class="release-tag latest">v0.2.0</span>
+                    <span class="release-date">Feb 2026</span>
+                    <span class="release-title">Architecture Overhaul</span>
+                </div>
+                <div class="release-body">
+                    Complete rewrite with 4-role multi-model system.
+                    <ul>
+                        <li>4 AI roles: Planner, Coder, Reviewer, Analyzer</li>
+                        <li>DAG-based task execution with dependency ordering</li>
+                        <li>Structured memory engine (replaces context dumps)</li>
+                        <li>Verification pipeline: syntax → lint → type check</li>
+                        <li>Self-correction loop with failure escalation</li>
+                        <li>Patch mode for targeted minimal fixes</li>
+                        <li>Interactive project launcher with resume support</li>
+                        <li>One-command installer for Mac, Linux, Windows</li>
+                        <li><code>jcode update</code> command for self-updates</li>
+                    </ul>
+                </div>
+            </li>
+            <li class="release-item">
+                <div class="release-header">
+                    <span class="release-tag">v0.1.1</span>
+                    <span class="release-date">Feb 2026</span>
+                    <span class="release-title">Bug Fixes & Enhancements</span>
+                </div>
+                <div class="release-body">
+                    <ul>
+                        <li>Fixed read-only file system error on path input</li>
+                        <li>First-run setup wizard</li>
+                        <li>Project tracking & resume</li>
+                        <li>Adaptive context windows based on complexity</li>
+                    </ul>
+                </div>
+            </li>
+            <li class="release-item">
+                <div class="release-header">
+                    <span class="release-tag">v0.1.0</span>
+                    <span class="release-date">Feb 2026</span>
+                    <span class="release-title">Initial Release</span>
+                </div>
+                <div class="release-body">
+                    <ul>
+                        <li>Dual-model architecture (DeepSeek-R1 + Qwen2.5-Coder)</li>
+                        <li>Rich CLI with interactive prompt</li>
+                        <li>Linear iteration loop with error feedback</li>
+                        <li>Basic session save/load</li>
+                    </ul>
+                </div>
+            </li>
+        </ul>
+    </section>
+</div>
+
+<!-- Footer -->
+<footer>
+    <div class="container">
+        <p>JCode is open source · MIT License · Developed by Ioan Andrei</p>
+        <p style="margin-top: 0.5rem;">
+            <a href="https://github.com/YOUR_USERNAME/JcodeAgent">GitHub</a> ·
+            <a href="#releases">Changelog</a> ·
+            <a href="BEGINNER_GUIDE.md">Beginner Guide</a> ·
+            <a href="TECHNICAL_GUIDE.md">Technical Docs</a>
+        </p>
+    </div>
+</footer>
+
+<script>
+    // ── Theme Toggle ──────────────────────────────────────
+    function toggleTheme() {
+        const html = document.documentElement;
+        const btn = document.querySelector('.theme-toggle');
+        if (html.getAttribute('data-theme') === 'dark') {
+            html.setAttribute('data-theme', 'light');
+            btn.textContent = '☀️';
+            localStorage.setItem('jcode-theme', 'light');
+        } else {
+            html.setAttribute('data-theme', 'dark');
+            btn.textContent = '🌙';
+            localStorage.setItem('jcode-theme', 'dark');
+        }
+    }
+
+    // Restore theme
+    (function() {
+        const saved = localStorage.getItem('jcode-theme');
+        if (saved === 'light') {
+            document.documentElement.setAttribute('data-theme', 'light');
+            document.querySelector('.theme-toggle').textContent = '☀️';
+        }
+    })();
+
+    // ── Install Tabs ──────────────────────────────────────
+    function switchTab(os) {
+        document.querySelectorAll('.install-tab').forEach(t => t.classList.remove('active'));
+        document.querySelectorAll('.install-panel').forEach(p => p.classList.remove('active'));
+        event.target.classList.add('active');
+        document.getElementById('tab-' + os).classList.add('active');
+    }
+
+    function copyInstall(os) {
+        const commands = {
+            mac: 'curl -fsSL https://jcode.dev/install.sh | bash',
+            win: 'iwr -useb https://jcode.dev/install.ps1 | iex'
+        };
+        navigator.clipboard.writeText(commands[os]).then(() => {
+            const btn = event.target;
+            btn.textContent = 'Copied!';
+            setTimeout(() => btn.textContent = 'Copy', 2000);
+        });
+    }
+</script>
+
+</body>
+</html>

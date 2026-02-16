@@ -1,5 +1,12 @@
 """
-JCode CLI v2 — Rich interactive shell for the 4-role coding agent.
+JCode CLI v2.1 — Rich interactive shell for the 4-role coding agent.
+
+Launch flow:
+  1. First-run setup wizard (if needed)
+  2. Check Ollama connection
+  3. Interactive launcher: new / continue / import
+  4. Build pipeline: plan → generate → review → verify → fix
+  5. REPL for inspection / additional commands
 
 Commands:
   build <prompt>  — full pipeline: plan → generate → review → verify → fix
@@ -8,6 +15,7 @@ Commands:
   tree            — show project tree
   projects        — list saved projects
   resume          — resume last project
+  update          — self-update JCode to latest version
   save / load     — manual session management
   settings        — show/edit settings
   clear           — clear screen
@@ -17,6 +25,8 @@ Commands:
 
 from __future__ import annotations
 
+import os
+import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -25,6 +35,7 @@ from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.table import Table
+from rich.prompt import Confirm
 
 from prompt_toolkit import prompt as pt_prompt
 from prompt_toolkit.history import InMemoryHistory
@@ -61,6 +72,7 @@ HELP_TEXT = """
 | `tree` | Show project directory tree |
 | `projects` | List all saved projects |
 | `resume` | Resume the last project |
+| `update` | Update JCode to latest version |
 | `save` | Manually save current session |
 | `load <path>` | Load a session file |
 | `settings` | View/edit settings |
@@ -91,11 +103,14 @@ def main():
         console.print("[dim]Then pull models: ollama pull deepseek-r1:14b && ollama pull qwen2.5-coder:14b[/dim]")
         sys.exit(1)
 
-    console.print("[green]✔ Ollama connected[/green]")
-    console.print(f"[dim]Default output: {settings_mgr.get_default_output_dir()}[/dim]")
-    console.print("[dim]Type 'help' for commands, or 'build <prompt>' to start.[/dim]\n")
+    console.print("[green]✔ Ollama connected[/green]\n")
+
+    # ── Interactive Launcher ───────────────────────────────────────
+    ctx, output_dir = _interactive_launcher(settings_mgr)
 
     # ── Main REPL ──────────────────────────────────────────────────
+    console.print("[dim]Type 'help' for commands, or 'build <prompt>' to start a new build.[/dim]\n")
+
     while True:
         try:
             user_input = pt_prompt(
@@ -147,6 +162,9 @@ def main():
         elif cmd == "resume":
             ctx, output_dir = _cmd_resume(settings_mgr)
 
+        elif cmd == "update":
+            _cmd_update()
+
         elif cmd == "save":
             _cmd_save(ctx, output_dir)
 
@@ -161,10 +179,188 @@ def main():
 
 
 # ═══════════════════════════════════════════════════════════════════
+# Interactive Launcher
+# ═══════════════════════════════════════════════════════════════════
+
+def _interactive_launcher(settings_mgr: SettingsManager) -> tuple[ContextManager | None, Path | None]:
+    """
+    Interactive project launcher — shown on every startup.
+    Returns (ctx, output_dir) or (None, None) if user skips.
+    """
+    console.print("[bold]What would you like to do?[/bold]\n")
+
+    projects = settings_mgr.list_projects()
+    has_projects = len(projects) > 0
+
+    options = []
+    options.append(("new", "🆕 Create a new project"))
+    if has_projects:
+        options.append(("continue", "📂 Continue a previous project"))
+    options.append(("import", "📥 Import a project (local path or GitHub URL)"))
+    options.append(("skip", "⏭️  Skip — go straight to the command prompt"))
+
+    for i, (_, label) in enumerate(options, 1):
+        console.print(f"  [cyan]{i}[/cyan]  {label}")
+
+    console.print()
+    choice_str = pt_prompt("Choose [1]: ").strip()
+    if not choice_str:
+        choice_str = "1"
+
+    try:
+        choice_idx = int(choice_str) - 1
+        choice_key = options[choice_idx][0]
+    except (ValueError, IndexError):
+        choice_key = "skip"
+
+    if choice_key == "new":
+        return _launcher_new_project(settings_mgr)
+    elif choice_key == "continue":
+        return _launcher_continue_project(settings_mgr, projects)
+    elif choice_key == "import":
+        return _launcher_import_project(settings_mgr)
+    else:
+        return None, None
+
+
+def _launcher_new_project(settings_mgr: SettingsManager) -> tuple[ContextManager | None, Path | None]:
+    """Create a new project from a prompt."""
+    console.print()
+    prompt = pt_prompt("Describe what you want to build:\n> ").strip()
+
+    if not prompt:
+        console.print("[dim]No prompt entered. Skipping.[/dim]")
+        return None, None
+
+    # Optional: clone a GitHub repo as a base
+    clone_url = pt_prompt(
+        "Clone a GitHub repo as starting point? (paste URL or press Enter to skip): "
+    ).strip()
+
+    ctx, output_dir = _cmd_build(prompt, settings_mgr, clone_url=clone_url or None)
+    return ctx, output_dir
+
+
+def _launcher_continue_project(
+    settings_mgr: SettingsManager, projects: list[dict]
+) -> tuple[ContextManager | None, Path | None]:
+    """Show a numbered list of projects and let the user pick one."""
+    console.print()
+    table = Table(title="Your Projects", show_lines=False)
+    table.add_column("#", width=3, style="cyan")
+    table.add_column("Name", style="bold")
+    table.add_column("Status")
+    table.add_column("Last Modified", style="dim")
+
+    for i, p in enumerate(projects, 1):
+        status = "[green]✅ Complete[/green]" if p.get("completed") else "[yellow]⚠ In Progress[/yellow]"
+        table.add_row(
+            str(i),
+            p.get("name", "?"),
+            status,
+            p.get("last_modified", "?")[:16],
+        )
+
+    console.print(table)
+    console.print()
+
+    pick = pt_prompt(f"Select project [1-{len(projects)}]: ").strip()
+    try:
+        idx = int(pick) - 1
+        proj = projects[idx]
+    except (ValueError, IndexError):
+        console.print("[dim]Invalid selection. Skipping.[/dim]")
+        return None, None
+
+    output_dir = Path(proj.get("output_dir", ""))
+    session_file = output_dir / ".jcode_session.json"
+
+    if not session_file.exists():
+        console.print(f"[yellow]No session file found at {session_file}[/yellow]")
+        console.print("[dim]The project exists but has no resumable session.[/dim]")
+        return None, output_dir
+
+    ctx = ContextManager.load_session(session_file)
+    console.print(f"\n[green]✔ Loaded: {proj.get('name', '?')}[/green]")
+    console.print(f"[dim]📁 {output_dir}[/dim]")
+
+    # Offer to continue building if not complete
+    if not proj.get("completed", False):
+        if Confirm.ask("Resume building where you left off?", default=True):
+            execute_plan(ctx, output_dir)
+
+    return ctx, output_dir
+
+
+def _launcher_import_project(settings_mgr: SettingsManager) -> tuple[ContextManager | None, Path | None]:
+    """Import from local path or GitHub URL."""
+    console.print()
+    source = pt_prompt("Enter local path or GitHub URL: ").strip()
+
+    if not source:
+        console.print("[dim]Nothing entered. Skipping.[/dim]")
+        return None, None
+
+    default_dir = settings_mgr.get_default_output_dir()
+
+    if source.startswith("http://") or source.startswith("https://") or source.startswith("git@"):
+        # GitHub clone
+        repo_name = source.rstrip("/").split("/")[-1].replace(".git", "")
+        target_dir = default_dir / repo_name
+        console.print(f"[dim]Cloning into {target_dir}...[/dim]")
+
+        try:
+            subprocess.run(
+                ["git", "clone", source, str(target_dir)],
+                check=True, capture_output=True, text=True,
+            )
+            console.print(f"[green]✔ Cloned: {source}[/green]")
+        except FileNotFoundError:
+            console.print("[red]Git is not installed. Please install git first.[/red]")
+            return None, None
+        except subprocess.CalledProcessError as e:
+            console.print(f"[red]Clone failed: {e.stderr.strip()}[/red]")
+            return None, None
+
+        output_dir = target_dir
+    else:
+        # Local path
+        output_dir = Path(source).expanduser().resolve()
+        if not output_dir.exists():
+            console.print(f"[red]Path not found: {output_dir}[/red]")
+            return None, None
+
+    # Check for existing session
+    session_file = output_dir / ".jcode_session.json"
+    ctx = None
+    if session_file.exists():
+        ctx = ContextManager.load_session(session_file)
+        console.print(f"[green]✔ Session found and loaded[/green]")
+    else:
+        console.print(f"[dim]No existing session. You can 'build <prompt>' to start working on this project.[/dim]")
+
+    # Save as a known project
+    settings_mgr.save_project_metadata({
+        "name": output_dir.name,
+        "prompt": "(imported)",
+        "output_dir": str(output_dir),
+        "last_modified": datetime.now().isoformat(),
+        "completed": False,
+    })
+
+    console.print(f"[dim]📁 {output_dir}[/dim]")
+    return ctx, output_dir
+
+
+# ═══════════════════════════════════════════════════════════════════
 # Commands
 # ═══════════════════════════════════════════════════════════════════
 
-def _cmd_build(prompt: str, settings_mgr: SettingsManager) -> tuple[ContextManager, Path]:
+def _cmd_build(
+    prompt: str,
+    settings_mgr: SettingsManager,
+    clone_url: str | None = None,
+) -> tuple[ContextManager, Path]:
     """Full pipeline: plan → generate → review → verify."""
     # ── Choose output directory ────────────────────────────────────
     default_dir = settings_mgr.get_default_output_dir()
@@ -182,6 +378,18 @@ def _cmd_build(prompt: str, settings_mgr: SettingsManager) -> tuple[ContextManag
     output_dir = output_dir / slug
 
     console.print(f"[dim]📁 Output: {output_dir}[/dim]")
+
+    # ── Optional: clone repo into output dir ───────────────────────
+    if clone_url:
+        console.print(f"[dim]Cloning {clone_url}...[/dim]")
+        try:
+            subprocess.run(
+                ["git", "clone", clone_url, str(output_dir)],
+                check=True, capture_output=True, text=True,
+            )
+            console.print(f"[green]✔ Repository cloned[/green]")
+        except (FileNotFoundError, subprocess.CalledProcessError) as e:
+            console.print(f"[yellow]⚠ Clone failed, continuing with empty project: {e}[/yellow]")
 
     # ── Detect complexity ──────────────────────────────────────────
     complexity = detect_complexity(prompt)
@@ -224,7 +432,7 @@ def _cmd_build(prompt: str, settings_mgr: SettingsManager) -> tuple[ContextManag
     if success:
         console.print(Panel("[bold green]🎉 Build complete![/bold green]", border_style="green"))
     else:
-        console.print(Panel("[bold yellow]⚠ Build finished with issues.[/bold yellow]", border_style="yellow"))
+        console.print(Panel("[bold yellow]⚠ Build finished with issues. Use 'plan' to see task statuses.[/bold yellow]", border_style="yellow"))
 
     return ctx, output_dir
 
@@ -331,6 +539,70 @@ def _cmd_resume(settings_mgr: SettingsManager) -> tuple[ContextManager | None, P
     console.print(f"[dim]📁 {output_dir}[/dim]")
 
     return ctx, output_dir
+
+
+def _cmd_update() -> None:
+    """Self-update JCode by pulling latest from git and re-installing."""
+    # Find the JCode package installation directory
+    jcode_root = Path(__file__).resolve().parent.parent
+
+    console.print(f"[dim]JCode installed at: {jcode_root}[/dim]")
+    console.print(f"[dim]Current version: v{__version__}[/dim]")
+
+    # Check if it's a git repo
+    if not (jcode_root / ".git").exists():
+        console.print("[yellow]⚠ JCode was not installed from git. Cannot auto-update.[/yellow]")
+        console.print("[dim]Re-install with: curl -fsSL https://jcode.dev/install.sh | bash[/dim]")
+        return
+
+    console.print("[dim]Pulling latest changes...[/dim]")
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(jcode_root), "pull", "--ff-only"],
+            capture_output=True, text=True, timeout=30,
+        )
+        if result.returncode != 0:
+            console.print(f"[yellow]⚠ Git pull failed: {result.stderr.strip()}[/yellow]")
+            console.print("[dim]You may have local changes. Try: git stash && jcode update[/dim]")
+            return
+
+        if "Already up to date" in result.stdout:
+            console.print("[green]✔ Already on the latest version.[/green]")
+            return
+
+        console.print(f"[dim]{result.stdout.strip()}[/dim]")
+    except FileNotFoundError:
+        console.print("[red]Git is not installed.[/red]")
+        return
+    except subprocess.TimeoutExpired:
+        console.print("[yellow]⚠ Git pull timed out.[/yellow]")
+        return
+
+    # Re-install the package
+    console.print("[dim]Re-installing dependencies...[/dim]")
+    pip_cmd = sys.executable.replace("python", "pip")
+    # Fallback: use python -m pip
+    try:
+        subprocess.run(
+            [sys.executable, "-m", "pip", "install", "-e", str(jcode_root), "-q"],
+            check=True, capture_output=True, text=True,
+        )
+    except subprocess.CalledProcessError as e:
+        console.print(f"[yellow]⚠ pip install failed: {e.stderr.strip()}[/yellow]")
+        return
+
+    # Read new version
+    try:
+        result = subprocess.run(
+            [sys.executable, "-c", "from jcode import __version__; print(__version__)"],
+            capture_output=True, text=True,
+        )
+        new_version = result.stdout.strip()
+    except Exception:
+        new_version = "unknown"
+
+    console.print(f"[green]✔ Updated to v{new_version}[/green]")
+    console.print("[dim]Restart JCode to use the new version.[/dim]")
 
 
 def _cmd_save(ctx: ContextManager | None, output_dir: Path | None) -> None:

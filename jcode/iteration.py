@@ -1,5 +1,5 @@
 """
-Iteration engine v2 — DAG-based task execution with 4-role pipeline.
+Iteration engine v2.1 — DAG-based task execution with 4-role pipeline.
 
 Pipeline per task:
   1. GENERATE  → Coder produces the file
@@ -8,6 +8,7 @@ Pipeline per task:
   4. ANALYZE   → If errors: Analyzer diagnoses root cause
   5. PATCH     → Coder applies targeted fix
   6. Repeat 3-5 until verified or max failures
+  7. ESCALATE  → If all 3 attempts fail: re-plan / simplify / skip / pause
 
 This is NOT a while-true loop. It's a state machine over a DAG.
 """
@@ -19,6 +20,7 @@ from pathlib import Path
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
+from rich.prompt import Prompt
 
 from jcode.config import MAX_ITERATIONS, MAX_TASK_FAILURES, TaskStatus
 from jcode.context import ContextManager
@@ -201,9 +203,168 @@ def _process_task(task_node, ctx: ContextManager, output_dir: Path) -> None:
             console.print(f"  [green]✅ Task {task_node.id} verified after {task_node.failure_count} fix(es)[/green]")
             return
 
-    # Exhausted fix attempts
-    task_node.status = TaskStatus.FAILED
-    console.print(f"  [red]❌ Task {task_node.id} failed after {MAX_TASK_FAILURES} attempts[/red]")
+    # Exhausted fix attempts — escalate
+    _escalate_failed_task(task_node, ctx, output_dir)
+
+
+def _escalate_failed_task(task_node, ctx: ContextManager, output_dir: Path) -> None:
+    """
+    Handle a task that failed all fix attempts.
+    Offers 4 strategies: re-plan, simplify, skip, or pause for user input.
+    """
+    console.print(Panel(
+        f"[bold red]Task {task_node.id} failed after {MAX_TASK_FAILURES} attempts[/bold red]\n"
+        f"File: [cyan]{task_node.file}[/cyan]\n"
+        f"Last error: [dim]{task_node.error_summary[:200]}[/dim]",
+        title="⚠️ Escalation Required",
+        border_style="red",
+    ))
+
+    console.print("  [cyan]1[/cyan]  🔄 Re-generate from scratch (fresh attempt, no patches)")
+    console.print("  [cyan]2[/cyan]  📝 Simplify (reduce task scope, try again)")
+    console.print("  [cyan]3[/cyan]  ⏭️  Skip this task and continue")
+    console.print("  [cyan]4[/cyan]  ⏸️  Pause — let me look at the error")
+    console.print()
+
+    choice = Prompt.ask("Choose", choices=["1", "2", "3", "4"], default="1")
+
+    if choice == "1":
+        _escalate_regenerate(task_node, ctx, output_dir)
+    elif choice == "2":
+        _escalate_simplify(task_node, ctx, output_dir)
+    elif choice == "3":
+        task_node.status = TaskStatus.SKIPPED
+        console.print(f"  [yellow]⏭️  Skipped task {task_node.id}: {task_node.file}[/yellow]")
+    elif choice == "4":
+        _escalate_pause(task_node, ctx, output_dir)
+
+
+def _escalate_regenerate(task_node, ctx: ContextManager, output_dir: Path) -> None:
+    """Throw away all patches, regenerate the file from scratch."""
+    console.print("[dim]Re-generating from scratch...[/dim]")
+
+    # Reset failure state
+    task_node.failure_count = 0
+    task_node.error_summary = ""
+    task_node.review_feedback = ""
+    task_node.status = TaskStatus.IN_PROGRESS
+
+    task_dict = {
+        "id": task_node.id,
+        "file": task_node.file,
+        "description": task_node.description,
+        "depends_on": task_node.depends_on,
+    }
+
+    content = generate_file(task_dict, ctx)
+    write_file(output_dir, task_node.file, content)
+    task_node.status = TaskStatus.GENERATED
+
+    # Verify
+    file_path = output_dir / task_node.file
+    verification = verify_file(file_path, output_dir)
+
+    if verification.passed:
+        task_node.status = TaskStatus.VERIFIED
+        console.print(f"  [green]✅ Task {task_node.id} verified on re-generation![/green]")
+    else:
+        task_node.status = TaskStatus.FAILED
+        console.print(f"  [red]❌ Re-generation also failed. Task marked as FAILED.[/red]")
+        console.print(f"  [dim]{verification.summary[:200]}[/dim]")
+
+
+def _escalate_simplify(task_node, ctx: ContextManager, output_dir: Path) -> None:
+    """Ask the Coder to produce a minimal, simplified version of the file."""
+    console.print("[dim]Generating simplified version...[/dim]")
+
+    task_node.failure_count = 0
+    task_node.status = TaskStatus.IN_PROGRESS
+
+    # Build a simplified task — append simplification instructions
+    simplified_task = {
+        "id": task_node.id,
+        "file": task_node.file,
+        "description": (
+            f"{task_node.description}\n\n"
+            f"IMPORTANT: Previous attempts failed with: {task_node.error_summary[:300]}\n"
+            f"Generate a MINIMAL, simplified version that compiles cleanly.\n"
+            f"Use only standard library imports. Add TODO comments for complex parts.\n"
+            f"Prioritize correctness over completeness."
+        ),
+        "depends_on": task_node.depends_on,
+    }
+
+    content = generate_file(simplified_task, ctx)
+    write_file(output_dir, task_node.file, content)
+    task_node.status = TaskStatus.GENERATED
+
+    # Verify
+    file_path = output_dir / task_node.file
+    verification = verify_file(file_path, output_dir)
+
+    if verification.passed:
+        task_node.status = TaskStatus.VERIFIED
+        console.print(f"  [green]✅ Task {task_node.id} verified with simplified version![/green]")
+    else:
+        task_node.status = TaskStatus.FAILED
+        console.print(f"  [red]❌ Simplified version also failed. Task marked as FAILED.[/red]")
+        console.print(f"  [dim]{verification.summary[:200]}[/dim]")
+
+
+def _escalate_pause(task_node, ctx: ContextManager, output_dir: Path) -> None:
+    """Pause and let the user inspect the error, optionally provide guidance."""
+    file_path = output_dir / task_node.file
+
+    console.print(Panel(
+        f"[bold]Task {task_node.id}:[/bold] {task_node.file}\n\n"
+        f"[bold]Error:[/bold]\n{task_node.error_summary[:500]}\n\n"
+        f"[bold]File location:[/bold] {file_path}\n\n"
+        f"[dim]You can edit the file manually and then choose an option below.[/dim]",
+        title="⏸️ Paused",
+        border_style="yellow",
+    ))
+
+    console.print("  [cyan]1[/cyan]  Re-verify (after manual edit)")
+    console.print("  [cyan]2[/cyan]  Provide guidance (tell the AI what to fix)")
+    console.print("  [cyan]3[/cyan]  Skip this task")
+    console.print()
+
+    choice = Prompt.ask("Choose", choices=["1", "2", "3"], default="1")
+
+    if choice == "1":
+        verification = verify_file(file_path, output_dir)
+        if verification.passed:
+            task_node.status = TaskStatus.VERIFIED
+            console.print(f"  [green]✅ Task {task_node.id} verified after manual edit![/green]")
+        else:
+            task_node.status = TaskStatus.FAILED
+            console.print(f"  [red]❌ Still failing: {verification.summary[:200]}[/red]")
+
+    elif choice == "2":
+        guidance = Prompt.ask("What should the AI fix?")
+        task_node.failure_count = 0
+        task_node.status = TaskStatus.NEEDS_FIX
+
+        content = patch_file(
+            task_node.file,
+            error=task_node.error_summary,
+            review_feedback=f"User guidance: {guidance}",
+            ctx=ctx,
+        )
+        write_file(output_dir, task_node.file, content)
+
+        verification = verify_file(file_path, output_dir)
+        if verification.passed:
+            task_node.status = TaskStatus.VERIFIED
+            console.print(f"  [green]✅ Task {task_node.id} verified with user guidance![/green]")
+        else:
+            task_node.status = TaskStatus.FAILED
+            console.print(f"  [red]❌ Still failing. Task marked as FAILED.[/red]")
+            console.print(f"  [dim]{verification.summary[:200]}[/dim]")
+
+    elif choice == "3":
+        task_node.status = TaskStatus.SKIPPED
+        console.print(f"  [yellow]⏭️  Skipped task {task_node.id}[/yellow]")
 
 
 def _show_task_progress(ctx: ContextManager) -> None:

@@ -24,3 +24,4 @@ jcode_output/
 
 # Sessions
 jcode_session*.json
+.DS_Store
