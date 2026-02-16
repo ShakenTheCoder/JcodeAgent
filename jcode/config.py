@@ -52,9 +52,9 @@ COMPLEXITY_SCALING = {
 }
 
 # ── Limits ─────────────────────────────────────────────────────────
-MAX_ITERATIONS = 8
+MAX_ITERATIONS = 15
 MAX_FILE_READ_CHARS = 12000
-MAX_TASK_FAILURES = 3         # Per task before escalation
+MAX_TASK_FAILURES = 8         # Per task before escalation — generous retry budget
 MAX_DIFF_LINES = 80           # Prefer patches under this
 
 # ── Project Defaults ───────────────────────────────────────────────

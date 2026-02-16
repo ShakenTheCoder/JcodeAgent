@@ -14,7 +14,7 @@
             --transition: 0.3s ease;
         }
 
-        /* ── Dark Theme ──────────────────────────────────── */
+        /* Dark Theme */
         [data-theme="dark"] {
             --bg: #050508;
             --bg-card: #0c0c12;
@@ -30,7 +30,7 @@
             --scanline: rgba(34, 211, 238, 0.03);
         }
 
-        /* ── Light Theme ─────────────────────────────────── */
+        /* Light Theme */
         [data-theme="light"] {
             --bg: #f8fafc;
             --bg-card: #ffffff;
@@ -60,18 +60,45 @@
 
         .container { max-width: 920px; margin: 0 auto; padding: 0 2rem; }
 
-        /* ── Theme Toggle ────────────────────────────────── */
-        .theme-toggle {
+        /* Theme Toggle Switch */
+        .theme-switch {
             position: fixed; top: 1.5rem; right: 1.5rem; z-index: 100;
-            background: var(--bg-card); border: 1px solid var(--border);
-            border-radius: 50%; width: 40px; height: 40px; cursor: pointer;
-            display: flex; align-items: center; justify-content: center;
-            font-size: 0.8rem; color: var(--text-dim);
+            display: flex; align-items: center; gap: 0.5rem;
+        }
+        .theme-switch .label {
+            font-size: 0.7rem; color: var(--text-dim);
+            font-family: var(--font-mono);
+        }
+        .switch {
+            position: relative; width: 48px; height: 26px;
+        }
+        .switch input { opacity: 0; width: 0; height: 0; }
+        .switch .slider {
+            position: absolute; cursor: pointer;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: var(--border);
+            border: 1px solid var(--border-glow);
+            border-radius: 26px;
             transition: all var(--transition);
         }
-        .theme-toggle:hover { border-color: var(--accent); color: var(--accent); }
+        .switch .slider::before {
+            content: '';
+            position: absolute; height: 20px; width: 20px;
+            left: 2px; bottom: 2px;
+            background: var(--accent);
+            border-radius: 50%;
+            transition: all var(--transition);
+            box-shadow: 0 0 8px var(--accent-glow);
+        }
+        .switch input:checked + .slider::before {
+            transform: translateX(22px);
+        }
+        .switch-icon {
+            font-size: 0.85rem;
+            transition: opacity var(--transition);
+        }
 
-        /* ── Nav ──────────────────────────────────────────── */
+        /* Nav */
         nav {
             padding: 1.5rem 0; display: flex;
             align-items: center; justify-content: space-between;
@@ -81,7 +108,7 @@
         .nav-links a { color: var(--text-dim); font-size: 0.8rem; transition: color var(--transition); }
         .nav-links a:hover { color: var(--accent); text-decoration: none; }
 
-        /* ── Hero ─────────────────────────────────────────── */
+        /* Hero */
         .hero { text-align: center; padding: 5rem 0 3rem; }
         .hero-ascii {
             color: var(--accent);
@@ -110,7 +137,7 @@
             line-height: 1.6;
         }
 
-        /* ── Holographic Card ────────────────────────────── */
+        /* Holographic Card */
         .holo-card {
             background: var(--holo-gradient);
             border: 1px solid var(--border);
@@ -136,7 +163,7 @@
         }
         .holo-card:hover::before { opacity: 1; }
 
-        /* ── Install Box ──────────────────────────────────── */
+        /* Install Box */
         .install-box {
             background: var(--bg-terminal);
             border: 1px solid var(--border);
@@ -171,7 +198,7 @@
         .install-panel { display: none; }
         .install-panel.active { display: block; }
 
-        /* ── Terminal Demo ────────────────────────────────── */
+        /* Terminal Demo */
         .terminal {
             background: var(--bg-terminal);
             border: 1px solid var(--border);
@@ -210,7 +237,7 @@
         }
         @keyframes blink { 50% { opacity: 0; } }
 
-        /* ── Section ──────────────────────────────────────── */
+        /* Section */
         section { padding: 4rem 0; border-top: 1px solid var(--border); }
         section h2 {
             font-family: var(--font-sans); font-size: 1.6rem;
@@ -222,7 +249,7 @@
             font-family: var(--font-sans); font-size: 0.95rem;
         }
 
-        /* ── Pipeline ─────────────────────────────────────── */
+        /* Pipeline */
         .pipeline { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 1.2rem; }
         .pipe-step { text-align: left; }
         .pipe-step .step-num {
@@ -233,12 +260,12 @@
         .pipe-step h3 { font-size: 1rem; margin-bottom: 0.4rem; color: var(--text); }
         .pipe-step p { font-size: 0.85rem; color: var(--text-dim); font-family: var(--font-sans); }
 
-        /* ── Features ─────────────────────────────────────── */
+        /* Features */
         .features { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 1.2rem; }
         .feature-card h3 { font-size: 0.9rem; margin-bottom: 0.4rem; color: var(--accent); }
         .feature-card p { font-size: 0.85rem; color: var(--text-dim); font-family: var(--font-sans); }
 
-        /* ── Releases ─────────────────────────────────────── */
+        /* Releases */
         .releases { list-style: none; }
         .release-item {
             background: var(--bg-card); border: 1px solid var(--border);
@@ -261,7 +288,7 @@
         }
         .release-body ul { padding-left: 1.2rem; margin-top: 0.4rem; }
 
-        /* ── Footer ──────────────────────────────────────── */
+        /* Footer */
         footer {
             border-top: 1px solid var(--border);
             padding: 2rem 0; text-align: center;
@@ -272,14 +299,20 @@
             .container { padding: 0 1rem; }
             .hero { padding: 3rem 0 2rem; }
             .hero-ascii { font-size: 0.35rem; }
+            .theme-switch { top: 1rem; right: 1rem; }
         }
     </style>
 </head>
 <body>
 
-<button class="theme-toggle" onclick="toggleTheme()" title="Toggle theme" aria-label="Toggle theme">
-    <span id="theme-icon">DRK</span>
-</button>
+<div class="theme-switch">
+    <span class="switch-icon" id="icon-sun">&#9788;</span>
+    <label class="switch">
+        <input type="checkbox" id="theme-checkbox" onchange="toggleTheme()">
+        <span class="slider"></span>
+    </label>
+    <span class="switch-icon" id="icon-moon">&#9790;</span>
+</div>
 
 <div class="container">
 
@@ -289,6 +322,8 @@
             <a href="#how-it-works">How It Works</a>
             <a href="#features">Features</a>
             <a href="#releases">Releases</a>
+            <a href="beginner-guide.html">Guide</a>
+            <a href="technical.html">Docs</a>
             <a href="https://github.com/ShakenTheCoder/JcodeAgent" target="_blank">GitHub</a>
         </div>
     </nav>
@@ -296,15 +331,15 @@
     <!-- Hero -->
     <div class="hero">
         <pre class="hero-ascii">
-     ██╗ ██████╗ ██████╗ ██████╗ ███████╗
-     ██║██╔════╝██╔═══██╗██╔══██╗██╔════╝
-     ██║██║     ██║   ██║██║  ██║█████╗
-██   ██║██║     ██║   ██║██║  ██║██╔══╝
-╚█████╔╝╚██████╗╚██████╔╝██████╔╝███████╗
- ╚════╝  ╚═════╝ ╚═════╝ ╚═════╝ ╚══════╝
+     &#9608;&#9608;&#9580; &#9608;&#9608;&#9608;&#9608;&#9608;&#9608;&#9580; &#9608;&#9608;&#9608;&#9608;&#9608;&#9608;&#9580; &#9608;&#9608;&#9608;&#9608;&#9608;&#9608;&#9580; &#9608;&#9608;&#9608;&#9608;&#9608;&#9608;&#9608;&#9580;
+     &#9608;&#9608;&#9553;&#9608;&#9608;&#9580;&#9552;&#9552;&#9552;&#9552;&#9569;&#9608;&#9608;&#9580;&#9552;&#9552;&#9552;&#9608;&#9608;&#9580;&#9608;&#9608;&#9580;&#9552;&#9552;&#9608;&#9608;&#9580;&#9608;&#9608;&#9580;&#9552;&#9552;&#9552;&#9552;&#9569;
+     &#9608;&#9608;&#9553;&#9608;&#9608;&#9553;     &#9608;&#9608;&#9553;   &#9608;&#9608;&#9553;&#9608;&#9608;&#9553;  &#9608;&#9608;&#9553;&#9608;&#9608;&#9608;&#9608;&#9608;&#9580;
+&#9608;&#9608;   &#9608;&#9608;&#9553;&#9608;&#9608;&#9553;     &#9608;&#9608;&#9553;   &#9608;&#9608;&#9553;&#9608;&#9608;&#9553;  &#9608;&#9608;&#9553;&#9608;&#9608;&#9580;&#9552;&#9552;&#9569;
+&#9580;&#9608;&#9608;&#9608;&#9608;&#9608;&#9580;&#9569;&#9580;&#9608;&#9608;&#9608;&#9608;&#9608;&#9608;&#9580;&#9580;&#9608;&#9608;&#9608;&#9608;&#9608;&#9608;&#9580;&#9569;&#9608;&#9608;&#9608;&#9608;&#9608;&#9608;&#9580;&#9569;&#9608;&#9608;&#9608;&#9608;&#9608;&#9608;&#9608;&#9580;
+ &#9580;&#9552;&#9552;&#9552;&#9552;&#9569; &#9580;&#9552;&#9552;&#9552;&#9552;&#9552;&#9569; &#9580;&#9552;&#9552;&#9552;&#9552;&#9552;&#9569; &#9580;&#9552;&#9552;&#9552;&#9552;&#9552;&#9569; &#9580;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9569;
         </pre>
         <h1>Your local, unlimited &amp; private <span class="accent">software engineer</span></h1>
-        <p>JCode plans, codes, reviews, and iterates — automatically — until your project works. 4 AI roles running entirely on your machine. No cloud. No API keys. No limits.</p>
+        <p>JCode plans, codes, reviews, and iterates &mdash; automatically &mdash; until your project works. 4 AI roles running entirely on your machine. No cloud. No API keys. No limits.</p>
 
         <div class="install-tabs">
             <button class="install-tab active" onclick="switchTab('mac')">Mac / Linux</button>
@@ -332,34 +367,34 @@
             <span class="terminal-dot r"></span>
             <span class="terminal-dot y"></span>
             <span class="terminal-dot g"></span>
-            <span class="terminal-title">jcode — zsh</span>
+            <span class="terminal-title">jcode &mdash; zsh</span>
         </div>
         <div class="terminal-body">
             <div><span class="prompt">$</span> <span class="cmd">jcode</span></div>
             <div><span class="cyan">Ollama connected</span></div>
             <div>&nbsp;</div>
-            <div><span class="dim">What would you like to do?</span></div>
+            <div><span class="prompt">jcode&gt;</span> <span class="cmd">build a REST API with FastAPI for a todo app</span></div>
             <div>&nbsp;</div>
-            <div><span class="cyan">  1</span>  <span class="cmd">New project</span></div>
-            <div><span class="dim">  2  Continue an existing project</span></div>
+            <div><span class="dim">12:04:01</span>  <span class="cyan">PHASE 1</span>   Planning project architecture</div>
+            <div><span class="dim">12:04:12</span>  <span class="cyan">PLAN</span>      6 task(s) created</div>
             <div>&nbsp;</div>
-            <div><span class="prompt">&gt;</span> <span class="cmd">1</span></div>
+            <div><span class="dim">12:04:12</span>  <span class="cyan">PHASE 2</span>   Building</div>
+            <div><span class="dim">12:04:15</span>  <span class="cyan">GENERATE</span>  main.py</div>
+            <div><span class="dim">12:04:22</span>  <span class="cyan">REVIEW</span>    <span class="ok">Approved</span></div>
+            <div><span class="dim">12:04:23</span>  <span class="cyan">VERIFY</span>    <span class="ok">passed</span></div>
+            <div><span class="dim">12:04:25</span>  <span class="cyan">GENERATE</span>  models.py</div>
+            <div><span class="dim">12:04:31</span>  <span class="cyan">REVIEW</span>    2 issue(s) -- patching</div>
+            <div><span class="dim">12:04:35</span>  <span class="cyan">VERIFY</span>    failed</div>
+            <div><span class="dim">12:04:35</span>  <span class="cyan">FIX</span>       Attempt 1/8 <span class="dim">(targeted patch)</span></div>
+            <div><span class="dim">12:04:40</span>  <span class="cyan">VERIFY</span>    <span class="ok">passed after 1 attempt(s)</span></div>
             <div>&nbsp;</div>
-            <div><span class="dim">Describe what you want to build:</span></div>
-            <div><span class="prompt">&gt;</span> <span class="cmd">REST API with FastAPI and SQLite for a todo app</span></div>
+            <div><span class="dim">12:05:10</span>  <span class="cyan">DONE</span>      Build complete -- all files verified</div>
             <div>&nbsp;</div>
-            <div><span class="dim">Complexity:</span> medium</div>
+            <div><span class="prompt">todo-api&gt;</span> <span class="cmd">add user authentication with JWT</span></div>
+            <div><span class="dim">12:05:18</span>  <span class="cyan">THINKING</span>  Processing your request...</div>
+            <div><span class="dim">12:05:30</span>  <span class="cyan">APPLIED</span>   Updated 3 file(s)</div>
             <div>&nbsp;</div>
-            <div><span class="cyan">Phase 1  PLANNING</span></div>
-            <div><span class="dim">  Plan created: 6 task(s)</span></div>
-            <div>&nbsp;</div>
-            <div><span class="cyan">Phase 2  BUILDING</span></div>
-            <div><span class="dim">  Generating main.py ... reviewing ... </span><span class="ok">verified</span></div>
-            <div><span class="dim">  Generating models.py ... reviewing ... fixing ... </span><span class="ok">verified</span></div>
-            <div><span class="dim">  Generating routes.py ... reviewing ... </span><span class="ok">verified</span></div>
-            <div>&nbsp;</div>
-            <div><span class="cyan">Build complete.</span></div>
-            <div><span class="prompt">jcode&gt;</span> <span class="typing-cursor"></span></div>
+            <div><span class="prompt">todo-api&gt;</span> <span class="typing-cursor"></span></div>
         </div>
     </div>
 
@@ -376,27 +411,27 @@
             <div class="holo-card pipe-step">
                 <div class="step-num">Step 02</div>
                 <h3>Coder</h3>
-                <p>Generates each file using structured memory — only the context it needs, not everything. Writes clean, complete code.</p>
+                <p>Generates each file using structured memory &mdash; only the context it needs, not everything. Writes clean, complete code.</p>
             </div>
             <div class="holo-card pipe-step">
                 <div class="step-num">Step 03</div>
                 <h3>Reviewer</h3>
-                <p>Pre-execution code review. Catches bugs, missing imports, and logic errors before anything runs. Issues get patched immediately.</p>
+                <p>Pre-execution code review with re-review loop. Catches bugs, missing imports, and logic errors. Issues get patched and re-reviewed.</p>
             </div>
             <div class="holo-card pipe-step">
                 <div class="step-num">Step 04</div>
                 <h3>Verifier</h3>
-                <p>Static analysis: syntax checks, linting, type validation. Every file is verified individually against real tooling.</p>
+                <p>Static analysis: syntax checks, linting, type validation, test execution. Every file is verified individually against real tooling.</p>
             </div>
             <div class="holo-card pipe-step">
                 <div class="step-num">Step 05</div>
                 <h3>Analyzer</h3>
-                <p>When something fails, the Analyzer diagnoses the root cause and creates a targeted fix strategy. No guessing.</p>
+                <p>When something fails, the Analyzer diagnoses the root cause with cross-file context. Deep analysis considers dependency chains.</p>
             </div>
             <div class="holo-card pipe-step">
                 <div class="step-num">Step 06</div>
                 <h3>Iterate</h3>
-                <p>Patch, re-verify, repeat. Up to 3 automatic fix cycles per file. If all fail, you choose: regenerate, simplify, skip, or guide.</p>
+                <p>Up to 8 fix cycles with 5 strategies: targeted patch, deep analysis, full regen, simplify, and research-based repair. No giving up.</p>
             </div>
         </div>
     </section>
@@ -411,20 +446,32 @@
                 <p>Everything runs on your machine. Your code never leaves your computer. No API keys, no cloud, no subscriptions. Ever.</p>
             </div>
             <div class="holo-card feature-card">
+                <h3>Pure Chat-Driven</h3>
+                <p>No commands to memorize. Just type naturally: "fix the login bug", "add dark mode", "how does routing work?" JCode understands your intent.</p>
+            </div>
+            <div class="holo-card feature-card">
+                <h3>8-Attempt Fix Engine</h3>
+                <p>5 escalating strategies per file: targeted patch, deep cross-file analysis, full regeneration, simplification, and research-based repair.</p>
+            </div>
+            <div class="holo-card feature-card">
                 <h3>DAG Task Engine</h3>
-                <p>Tasks have dependencies. A file isn't generated until its deps are verified. No more broken imports or circular references.</p>
+                <p>Tasks have dependencies. A file is not generated until its deps are verified. No more broken imports or circular references.</p>
             </div>
             <div class="holo-card feature-card">
                 <h3>Structured Memory</h3>
-                <p>Each role sees only what it needs — architecture summary, file index, failure log. Not raw context dumps. That's how 14B competes with 200B.</p>
+                <p>Each role sees only what it needs &mdash; architecture summary, file index, failure log. Not raw context dumps. That is how 14B competes with 200B.</p>
             </div>
             <div class="holo-card feature-card">
-                <h3>Patch Mode</h3>
-                <p>Fixes are minimal, targeted patches — not full file regeneration. Working code stays intact. Only the broken part gets rewritten.</p>
+                <h3>Web Search & Docs</h3>
+                <p>Fetches documentation and searches the web to build better code. Reads APIs, frameworks docs, and guides. All with your permission.</p>
             </div>
             <div class="holo-card feature-card">
-                <h3>Automatic Reiteration</h3>
-                <p>Generate, review, verify, fix — automatically. Multiple cycles per file. Escalation with 4 strategies if all attempts fail.</p>
+                <h3>Auto Run & Deploy</h3>
+                <p>Detects your tech stack and knows exactly how to run it. Ask for deploy guidance and get copy-pasteable commands for Vercel, Railway, Docker, and more.</p>
+            </div>
+            <div class="holo-card feature-card">
+                <h3>Per-Project Chat</h3>
+                <p>Every project gets its own conversation history. Resume where you left off. Brainstorm features, request changes, or just ask questions.</p>
             </div>
             <div class="holo-card feature-card">
                 <h3>Save & Resume</h3>
@@ -440,7 +487,72 @@
         <ul class="releases">
             <li class="release-item">
                 <div class="release-header">
-                    <span class="release-tag">v0.2.0</span>
+                    <span class="release-tag">v0.5.1</span>
+                    <span class="release-date">Feb 2026</span>
+                    <span class="release-title">Resilient Fix Engine & Docs</span>
+                </div>
+                <div class="release-body">
+                    Major overhaul of the code review and fix pipeline.
+                    <ul>
+                        <li>8-attempt fix loop with 5 escalating strategies</li>
+                        <li>Cross-file dependency analysis for deeper root cause detection</li>
+                        <li>Research-based error pattern matching (last resort strategy)</li>
+                        <li>Agent knows how to run and deploy all major project types</li>
+                        <li>Beginner guide and technical documentation</li>
+                        <li>Landing page dark/light theme toggle</li>
+                    </ul>
+                </div>
+            </li>
+            <li class="release-item">
+                <div class="release-header">
+                    <span class="release-tag old">v0.5.0</span>
+                    <span class="release-date">Feb 2026</span>
+                    <span class="release-title">Pure Chat-Driven Interaction</span>
+                </div>
+                <div class="release-body">
+                    Complete UX rewrite &mdash; everything is natural language chat.
+                    <ul>
+                        <li>Removed separate modify/add/docs/search commands</li>
+                        <li>Agent detects intent: action mode vs discussion mode</li>
+                        <li>Stronger prompts for reliable file change format</li>
+                        <li>Installer visual overhaul: ASCII banner, spinners, progress bars</li>
+                        <li>Smart run command: auto npm install, subdirectory detection</li>
+                    </ul>
+                </div>
+            </li>
+            <li class="release-item">
+                <div class="release-header">
+                    <span class="release-tag old">v0.4.0</span>
+                    <span class="release-date">Feb 2026</span>
+                    <span class="release-title">Per-Project Chat & Web Search</span>
+                </div>
+                <div class="release-body">
+                    <ul>
+                        <li>Persistent permissions (ask once, remember forever)</li>
+                        <li>Per-project chat history with session persistence</li>
+                        <li>Web search and documentation fetching (DuckDuckGo)</li>
+                        <li>Run command with auto-detection</li>
+                        <li>Two-level REPL: home + project mode</li>
+                    </ul>
+                </div>
+            </li>
+            <li class="release-item">
+                <div class="release-header">
+                    <span class="release-tag old">v0.3.0</span>
+                    <span class="release-date">Feb 2026</span>
+                    <span class="release-title">UX Redesign</span>
+                </div>
+                <div class="release-body">
+                    <ul>
+                        <li>Clean terminal UI with timestamped log lines</li>
+                        <li>Removed all emojis for professional output</li>
+                        <li>Improved error handling and crash resilience</li>
+                    </ul>
+                </div>
+            </li>
+            <li class="release-item">
+                <div class="release-header">
+                    <span class="release-tag old">v0.2.0</span>
                     <span class="release-date">Feb 2026</span>
                     <span class="release-title">Architecture Overhaul</span>
                 </div>
@@ -451,26 +563,8 @@
                         <li>DAG-based task execution with dependency ordering</li>
                         <li>Structured memory engine</li>
                         <li>Verification pipeline: syntax, lint, type checks</li>
-                        <li>Self-correction loop with failure escalation (4 strategies)</li>
-                        <li>Patch mode for targeted minimal fixes</li>
-                        <li>Interactive project launcher with resume support</li>
+                        <li>Self-correction loop with failure escalation</li>
                         <li>One-command installer for Mac, Linux, Windows</li>
-                        <li><code>jcode update</code> command for self-updates</li>
-                    </ul>
-                </div>
-            </li>
-            <li class="release-item">
-                <div class="release-header">
-                    <span class="release-tag old">v0.1.1</span>
-                    <span class="release-date">Feb 2026</span>
-                    <span class="release-title">Bug Fixes</span>
-                </div>
-                <div class="release-body">
-                    <ul>
-                        <li>Fixed read-only file system error</li>
-                        <li>First-run setup wizard</li>
-                        <li>Project tracking and resume</li>
-                        <li>Adaptive context windows</li>
                     </ul>
                 </div>
             </li>
@@ -495,12 +589,12 @@
 
 <footer>
     <div class="container">
-        <p>JCode is open source &middot; MIT License &middot; Developed by Ioan Andrei</p>
+        <p>JCode is open source &middot; MIT License &middot; Developed by <a href="https://www.linkedin.com/in/tudor-andrei-ioan/" target="_blank">Ioan Andrei</a></p>
         <p style="margin-top:0.4rem">
             <a href="https://github.com/ShakenTheCoder/JcodeAgent">GitHub</a> &middot;
             <a href="#releases">Changelog</a> &middot;
-            <a href="BEGINNER_GUIDE.md">Beginner Guide</a> &middot;
-            <a href="TECHNICAL_GUIDE.md">Technical Docs</a>
+            <a href="beginner-guide.html">Beginner Guide</a> &middot;
+            <a href="technical.html">Technical Docs</a>
         </p>
     </div>
 </footer>
@@ -508,14 +602,12 @@
 <script>
     function toggleTheme() {
         const html = document.documentElement;
-        const icon = document.getElementById('theme-icon');
-        if (html.getAttribute('data-theme') === 'dark') {
+        const cb = document.getElementById('theme-checkbox');
+        if (cb.checked) {
             html.setAttribute('data-theme', 'light');
-            icon.textContent = 'LGT';
             localStorage.setItem('jcode-theme', 'light');
         } else {
             html.setAttribute('data-theme', 'dark');
-            icon.textContent = 'DRK';
             localStorage.setItem('jcode-theme', 'dark');
         }
     }
@@ -524,7 +616,7 @@
         const saved = localStorage.getItem('jcode-theme');
         if (saved === 'light') {
             document.documentElement.setAttribute('data-theme', 'light');
-            document.getElementById('theme-icon').textContent = 'LGT';
+            document.getElementById('theme-checkbox').checked = true;
         }
     })();
 

@@ -1,16 +1,21 @@
 """
-Iteration engine v3.0 — DAG-based task execution with log-style progress.
+Iteration engine v4.0 — Resilient DAG-based task execution.
 
 Pipeline per task:
-  1. GENERATE  → Coder produces the file
-  2. REVIEW    → Reviewer critiques it
-  3. VERIFY    → Static analysis + syntax + lint
-  4. ANALYZE   → If errors: Analyzer diagnoses root cause
-  5. PATCH     → Coder applies targeted fix
-  6. Repeat 3-5 until verified or max failures
-  7. ESCALATE  → If all attempts fail
+  1. GENERATE   -> Coder produces the file
+  2. REVIEW     -> Reviewer critiques it (with re-review loop)
+  3. VERIFY     -> Static analysis + syntax + lint
+  4. FIX LOOP   -> Multi-strategy repair with 8 attempts:
+       a. Targeted patch (first 3 attempts — cheapest)
+       b. Deep re-analysis with cross-file context (attempts 4-5)
+       c. Full regeneration from scratch with error history (attempt 6)
+       d. Simplified/minimal version (attempt 7)
+       e. Research-based fix — analyze error patterns (attempt 8)
+  5. ESCALATE   -> If ALL strategies fail, user chooses next step
 
-Progress is shown as timestamped log lines.
+Philosophy: the user should receive working code. We exhaust every
+strategy before giving up. 8 attempts with 5 different strategies
+means the agent genuinely tries to solve the problem.
 """
 
 from __future__ import annotations
@@ -30,7 +35,7 @@ from jcode.reviewer import review_file
 from jcode.analyzer import analyze_error
 from jcode.planner import refine_plan
 from jcode.file_manager import ensure_project_dir, write_file, print_tree
-from jcode.executor import verify_file, install_dependencies, shell_exec
+from jcode.executor import verify_file, install_dependencies, shell_exec, run_tests
 
 console = Console()
 
@@ -60,12 +65,12 @@ def execute_plan(ctx: ContextManager, output_dir: Path) -> bool:
         return False
 
     _log("ENGINE", f"Executing {len(dag)} task(s) via DAG pipeline")
-    _log("ENGINE", "Pipeline: Generate > Review > Verify > Fix")
+    _log("ENGINE", "Pipeline: Generate > Review > Verify > Fix (up to 8 attempts)")
 
-    # ── Install deps before building ───────────────────────────────
+    # -- Install deps before building
     install_dependencies(output_dir, ctx.state.tech_stack)
 
-    # ── DAG execution loop ─────────────────────────────────────────
+    # -- DAG execution loop
     global_iteration = 0
 
     while not ctx.all_tasks_terminal() and global_iteration < MAX_ITERATIONS:
@@ -75,7 +80,7 @@ def execute_plan(ctx: ContextManager, output_dir: Path) -> bool:
         if not ready:
             pending = [t for t in dag if not t.is_terminal]
             if pending:
-                _log("DEADLOCK", "No tasks ready — possible dependency issue")
+                _log("DEADLOCK", "No tasks ready -- possible dependency issue")
                 for t in pending:
                     t.status = TaskStatus.SKIPPED
                     _log("SKIP", f"Task {t.id}: {t.file}")
@@ -87,10 +92,21 @@ def execute_plan(ctx: ContextManager, output_dir: Path) -> bool:
         _show_task_progress(ctx)
         _auto_save_session(ctx, output_dir)
 
-    # ── Post-build: install deps again (new files may have added some) ──
+    # -- Post-build: install deps again (new files may have added some)
     install_dependencies(output_dir, ctx.state.tech_stack)
 
-    # ── Final summary ──────────────────────────────────────────────
+    # -- Run tests if they exist
+    _log("TEST", "Checking for test suite...")
+    test_result = run_tests(output_dir, ctx.state.tech_stack)
+    if test_result.command != "(no tests)":
+        if test_result.success:
+            _log("TEST", "[cyan]All tests passed[/cyan]")
+        else:
+            _log("TEST", f"Tests failed: {test_result.error_summary[:200]}")
+    else:
+        _log("TEST", "No test runner detected -- skipping")
+
+    # -- Final summary
     console.print()
     print_tree(output_dir, plan.get("project_name", "project"))
 
@@ -108,10 +124,14 @@ def execute_plan(ctx: ContextManager, output_dir: Path) -> bool:
     return ctx.state.completed
 
 
+# =====================================================================
+# Task processing — the core pipeline
+# =====================================================================
+
 def _process_task(task_node, ctx: ContextManager, output_dir: Path) -> None:
     """
     Full pipeline for a single task:
-    Generate > Review > Verify > (Analyze+Patch loop)
+    Generate > Review (with re-review) > Verify > Multi-strategy fix loop
     """
     task_dict = {
         "id": task_node.id,
@@ -123,115 +143,457 @@ def _process_task(task_node, ctx: ContextManager, output_dir: Path) -> None:
     _log("TASK", f"#{task_node.id} {task_node.file}")
     _log("TASK", f"  {task_node.description[:80]}")
 
-    # ── Step 1: Generate ───────────────────────────────────────────
+    # -- Step 1: Generate
     task_node.status = TaskStatus.IN_PROGRESS
     _log("GENERATE", task_node.file)
     content = generate_file(task_dict, ctx)
     write_file(output_dir, task_node.file, content)
     task_node.status = TaskStatus.GENERATED
 
-    # ── Step 2: Review ─────────────────────────────────────────────
-    _log("REVIEW", task_node.file)
-    task_node.status = TaskStatus.REVIEWING
-    review = review_file(task_node.file, ctx)
+    # -- Step 2: Review (with one re-review pass if issues found)
+    _review_and_patch(task_node, ctx, output_dir)
 
-    if not review.get("approved", True):
-        issues = review.get("issues", [])
-        critical_issues = [i for i in issues if i.get("severity") in ("critical", "warning")]
-
-        if critical_issues:
-            feedback = "\n".join(f"- [{i['severity']}] {i['description']}" for i in critical_issues)
-            task_node.review_feedback = feedback
-            task_node.status = TaskStatus.NEEDS_FIX
-            _log("REVIEW", f"  {len(critical_issues)} issue(s) found — patching")
-
-            content = patch_file(
-                task_node.file,
-                error="Reviewer found issues before execution",
-                review_feedback=feedback,
-                ctx=ctx,
-            )
-            write_file(output_dir, task_node.file, content)
-            task_node.status = TaskStatus.GENERATED
-        else:
-            _log("REVIEW", "  Approved")
-    else:
-        _log("REVIEW", "  Approved")
-
-    # ── Step 3: Verify (static analysis) ───────────────────────────
+    # -- Step 3: Verify (static analysis)
     file_path = output_dir / task_node.file
     _log("VERIFY", task_node.file)
     verification = verify_file(file_path, output_dir)
 
     if verification.passed:
         task_node.status = TaskStatus.VERIFIED
-        _log("VERIFY", f"  [cyan]passed[/cyan]")
+        _log("VERIFY", "  [cyan]passed[/cyan]")
         return
 
     _log("VERIFY", f"  failed: {verification.summary[:120]}")
 
-    # ── Step 4: Fix loop (Analyze > Patch > Verify) ───────────────
-    while task_node.failure_count < MAX_TASK_FAILURES:
-        task_node.failure_count += 1
-        task_node.status = TaskStatus.NEEDS_FIX
+    # -- Step 4: Multi-strategy fix loop
+    _multi_strategy_fix(task_node, ctx, output_dir, verification)
 
-        error_output = verification.summary
-        _log("ANALYZE", f"  Fix attempt {task_node.failure_count}/{MAX_TASK_FAILURES}")
 
-        analysis = analyze_error(task_node.file, error_output, ctx)
-        task_node.error_summary = analysis.get("root_cause", error_output)
+# =====================================================================
+# Review with re-review capability
+# =====================================================================
 
-        ctx.record_failure(
-            file_path=task_node.file,
-            error=task_node.error_summary,
-            fix=analysis.get("fix_strategy", ""),
-            iteration=ctx.state.iteration,
+def _review_and_patch(task_node, ctx: ContextManager, output_dir: Path) -> None:
+    """Review the file, patch if needed, then re-review once to confirm."""
+    max_review_rounds = 2
+
+    for review_round in range(max_review_rounds):
+        round_label = f"(round {review_round + 1})" if review_round > 0 else ""
+        _log("REVIEW", f"{task_node.file} {round_label}")
+        task_node.status = TaskStatus.REVIEWING
+        review = review_file(task_node.file, ctx)
+
+        if review.get("approved", True):
+            _log("REVIEW", "  Approved")
+            return
+
+        issues = review.get("issues", [])
+        critical_issues = [
+            i for i in issues
+            if i.get("severity") in ("critical", "warning")
+        ]
+
+        if not critical_issues:
+            _log("REVIEW", "  Approved (suggestions only)")
+            return
+
+        feedback = "\n".join(
+            f"- [{i['severity']}] {i['description']}" for i in critical_issues
         )
-        ctx.bump_iteration()
+        task_node.review_feedback = feedback
+        task_node.status = TaskStatus.NEEDS_FIX
+        _log("REVIEW", f"  {len(critical_issues)} issue(s) found -- patching")
 
-        _log("PATCH", task_node.file)
         content = patch_file(
             task_node.file,
-            error=task_node.error_summary,
-            review_feedback=analysis.get("fix_strategy", ""),
+            error="Reviewer found issues before execution",
+            review_feedback=feedback,
             ctx=ctx,
         )
         write_file(output_dir, task_node.file, content)
+        task_node.status = TaskStatus.GENERATED
 
-        _log("VERIFY", task_node.file)
-        verification = verify_file(file_path, output_dir)
+    _log("REVIEW", "  Accepted after review patches")
+
+
+# =====================================================================
+# Multi-strategy fix loop — the heart of resilience
+# =====================================================================
+
+def _multi_strategy_fix(
+    task_node,
+    ctx: ContextManager,
+    output_dir: Path,
+    initial_verification,
+) -> None:
+    """
+    Try up to MAX_TASK_FAILURES fix strategies, escalating in complexity:
+
+    Attempts 1-3: Targeted patch (cheapest — just fix what is broken)
+    Attempt 4:    Deep analysis with cross-file context
+    Attempt 5:    Deep analysis + dependency re-check
+    Attempt 6:    Full regeneration from scratch with error history
+    Attempt 7:    Simplified/minimal version
+    Attempt 8:    Research-based fix (analyze error class, apply known pattern)
+
+    Each attempt: Analyze > Fix > Verify
+    """
+    verification = initial_verification
+
+    while task_node.failure_count < MAX_TASK_FAILURES:
+        task_node.failure_count += 1
+        attempt = task_node.failure_count
+        task_node.status = TaskStatus.NEEDS_FIX
+        file_path = output_dir / task_node.file
+
+        error_output = verification.summary
+
+        # Choose strategy based on attempt number
+        if attempt <= 3:
+            # -- Strategy A: Targeted patch
+            _log("FIX", f"  Attempt {attempt}/{MAX_TASK_FAILURES} [dim](targeted patch)[/dim]")
+            verification = _strategy_targeted_patch(
+                task_node, ctx, output_dir, error_output
+            )
+
+        elif attempt <= 5:
+            # -- Strategy B: Deep analysis with cross-file context
+            _log("FIX", f"  Attempt {attempt}/{MAX_TASK_FAILURES} [dim](deep analysis)[/dim]")
+            verification = _strategy_deep_analysis(
+                task_node, ctx, output_dir, error_output
+            )
+
+        elif attempt == 6:
+            # -- Strategy C: Full regeneration from scratch
+            _log("FIX", f"  Attempt {attempt}/{MAX_TASK_FAILURES} [dim](full regeneration)[/dim]")
+            verification = _strategy_regenerate(
+                task_node, ctx, output_dir, error_output
+            )
+
+        elif attempt == 7:
+            # -- Strategy D: Simplified/minimal version
+            _log("FIX", f"  Attempt {attempt}/{MAX_TASK_FAILURES} [dim](simplified build)[/dim]")
+            verification = _strategy_simplify(
+                task_node, ctx, output_dir, error_output
+            )
+
+        else:
+            # -- Strategy E: Research-based fix (last resort)
+            _log("FIX", f"  Attempt {attempt}/{MAX_TASK_FAILURES} [dim](research fix)[/dim]")
+            verification = _strategy_research_fix(
+                task_node, ctx, output_dir, error_output
+            )
+
         if verification.passed:
             task_node.status = TaskStatus.VERIFIED
-            _log("VERIFY", f"  [cyan]passed[/cyan] after {task_node.failure_count} fix(es)")
+            _log("VERIFY", f"  [cyan]passed[/cyan] after {attempt} attempt(s)")
             return
 
         _log("VERIFY", f"  still failing: {verification.summary[:100]}")
 
-    # Exhausted fix attempts — escalate
+    # Exhausted ALL fix attempts -- escalate
     _escalate_failed_task(task_node, ctx, output_dir)
 
 
+# =====================================================================
+# Fix strategies
+# =====================================================================
+
+def _strategy_targeted_patch(task_node, ctx, output_dir, error_output):
+    """Strategy A: Simple analyze > patch > verify."""
+    analysis = analyze_error(task_node.file, error_output, ctx)
+    task_node.error_summary = analysis.get("root_cause", error_output)
+
+    ctx.record_failure(
+        file_path=task_node.file,
+        error=task_node.error_summary,
+        fix=analysis.get("fix_strategy", ""),
+        iteration=ctx.state.iteration,
+    )
+    ctx.bump_iteration()
+
+    _log("PATCH", task_node.file)
+    content = patch_file(
+        task_node.file,
+        error=task_node.error_summary,
+        review_feedback=analysis.get("fix_strategy", ""),
+        ctx=ctx,
+    )
+    write_file(output_dir, task_node.file, content)
+
+    file_path = output_dir / task_node.file
+    _log("VERIFY", task_node.file)
+    return verify_file(file_path, output_dir)
+
+
+def _strategy_deep_analysis(task_node, ctx, output_dir, error_output):
+    """
+    Strategy B: Deep analysis with cross-file dependency context.
+    Feeds the analyzer not just the broken file, but also its dependencies.
+    """
+    # Gather dependency file contents for richer analysis
+    dep_files = ctx.state.dependency_graph.get(task_node.file, [])
+    cross_file_context = ""
+    for dep_path in dep_files[:5]:
+        dep_content = ctx.state.files.get(dep_path, "")
+        if dep_content:
+            cross_file_context += f"\n\n--- {dep_path} ---\n{dep_content[:3000]}"
+
+    # Also look at files that import this file (reverse deps)
+    importers = []
+    for fpath, deps in ctx.state.dependency_graph.items():
+        if task_node.file in deps:
+            importers.append(fpath)
+    for imp_path in importers[:3]:
+        imp_content = ctx.state.files.get(imp_path, "")
+        if imp_content:
+            cross_file_context += f"\n\n--- {imp_path} (imports this file) ---\n{imp_content[:2000]}"
+
+    # Build enriched error context
+    all_failures = ctx.get_failure_log_str(task_node.file)
+    enriched_error = (
+        f"ERROR: {error_output}\n\n"
+        f"PREVIOUS FIX ATTEMPTS:\n{all_failures}\n\n"
+        f"CROSS-FILE CONTEXT:\n{cross_file_context}\n\n"
+        f"NOTE: Previous targeted patches failed. Think deeper about the root cause. "
+        f"The issue may be in how this file interacts with its dependencies."
+    )
+
+    analysis = analyze_error(task_node.file, enriched_error, ctx)
+    task_node.error_summary = analysis.get("root_cause", error_output)
+
+    # Check if the analyzer says it is a dependency issue
+    if analysis.get("is_dependency_issue"):
+        affected = analysis.get("affected_file", "")
+        if affected and affected != task_node.file and affected in ctx.state.files:
+            _log("FIX", f"  Dependency issue detected -- also patching {affected}")
+            dep_content = patch_file(
+                affected,
+                error=f"Downstream file {task_node.file} fails because of this file: {task_node.error_summary}",
+                review_feedback=analysis.get("fix_strategy", ""),
+                ctx=ctx,
+            )
+            write_file(output_dir, affected, dep_content)
+
+    ctx.record_failure(
+        file_path=task_node.file,
+        error=task_node.error_summary,
+        fix=f"[deep] {analysis.get('fix_strategy', '')}",
+        iteration=ctx.state.iteration,
+    )
+    ctx.bump_iteration()
+
+    _log("PATCH", f"{task_node.file} (deep)")
+    content = patch_file(
+        task_node.file,
+        error=task_node.error_summary,
+        review_feedback=(
+            f"DEEP ANALYSIS:\n{analysis.get('fix_strategy', '')}\n\n"
+            f"Cross-file context was considered. "
+            f"All previous fix attempts failed, so try a fundamentally different approach."
+        ),
+        ctx=ctx,
+    )
+    write_file(output_dir, task_node.file, content)
+
+    file_path = output_dir / task_node.file
+    _log("VERIFY", task_node.file)
+
+    # Re-install deps in case the fix added new requirements
+    install_dependencies(output_dir, ctx.state.tech_stack)
+
+    return verify_file(file_path, output_dir)
+
+
+def _strategy_regenerate(task_node, ctx, output_dir, error_output):
+    """
+    Strategy C: Throw away the file and regenerate from scratch,
+    but with full knowledge of what went wrong.
+    """
+    _log("REGEN", f"Task {task_node.id}: fresh generation with error history")
+
+    all_failures = ctx.get_failure_log_str(task_node.file)
+
+    # Build an enriched task description
+    enriched_task = {
+        "id": task_node.id,
+        "file": task_node.file,
+        "description": (
+            f"{task_node.description}\n\n"
+            f"CRITICAL: This file has been generated before but failed verification "
+            f"after {task_node.failure_count} attempts.\n\n"
+            f"Previous errors:\n{all_failures}\n\n"
+            f"Last error: {error_output[:500]}\n\n"
+            f"Requirements:\n"
+            f"1. Write clean, correct code that will pass syntax checks and linting.\n"
+            f"2. Include ALL necessary imports.\n"
+            f"3. Make sure all function signatures match what other files expect.\n"
+            f"4. DO NOT repeat the same mistakes.\n"
+            f"5. If unsure about an API, use the simplest correct approach."
+        ),
+        "depends_on": task_node.depends_on,
+    }
+
+    content = generate_file(enriched_task, ctx)
+    write_file(output_dir, task_node.file, content)
+
+    ctx.record_failure(
+        file_path=task_node.file,
+        error=error_output,
+        fix="[regen] Full regeneration from scratch with error history",
+        iteration=ctx.state.iteration,
+    )
+    ctx.bump_iteration()
+
+    file_path = output_dir / task_node.file
+    _log("VERIFY", task_node.file)
+    return verify_file(file_path, output_dir)
+
+
+def _strategy_simplify(task_node, ctx, output_dir, error_output):
+    """
+    Strategy D: Generate a minimal, simplified version that
+    definitely compiles. Sacrifice features for correctness.
+    """
+    _log("SIMPLIFY", f"Task {task_node.id}: generating minimal version")
+
+    simplified_task = {
+        "id": task_node.id,
+        "file": task_node.file,
+        "description": (
+            f"{task_node.description}\n\n"
+            f"IMPORTANT: All previous attempts to generate this file failed.\n"
+            f"Last error: {error_output[:300]}\n\n"
+            f"Generate a MINIMAL, simplified version that DEFINITELY compiles.\n"
+            f"Rules for this attempt:\n"
+            f"1. Use ONLY standard library imports (no third-party packages).\n"
+            f"2. Keep the implementation as simple as possible.\n"
+            f"3. Add TODO comments for any complex parts you are skipping.\n"
+            f"4. Make sure every function has a proper return value.\n"
+            f"5. Use placeholder data instead of complex logic if needed.\n"
+            f"6. Prioritize CORRECTNESS over completeness.\n"
+            f"7. Test-compile the code mentally before outputting it."
+        ),
+        "depends_on": task_node.depends_on,
+    }
+
+    content = generate_file(simplified_task, ctx)
+    write_file(output_dir, task_node.file, content)
+
+    ctx.record_failure(
+        file_path=task_node.file,
+        error=error_output,
+        fix="[simplify] Minimal version with stdlib only",
+        iteration=ctx.state.iteration,
+    )
+    ctx.bump_iteration()
+
+    file_path = output_dir / task_node.file
+    _log("VERIFY", task_node.file)
+    return verify_file(file_path, output_dir)
+
+
+def _strategy_research_fix(task_node, ctx, output_dir, error_output):
+    """
+    Strategy E (last resort): Analyze the error class/pattern and apply
+    known fix patterns. Feed the coder extremely explicit instructions.
+    """
+    _log("RESEARCH", f"Task {task_node.id}: analyzing error patterns")
+
+    # Classify the error type
+    error_lower = error_output.lower()
+    fix_hints = []
+
+    if "import" in error_lower or "modulenotfounderror" in error_lower:
+        fix_hints.append("This is an import error. Remove the broken import or replace it with a correct one.")
+        fix_hints.append("Check: is the module name spelled correctly? Is it installed? Is it a relative vs absolute import issue?")
+    if "syntax" in error_lower or "syntaxerror" in error_lower:
+        fix_hints.append("This is a syntax error. Check for missing colons, brackets, parentheses, or indentation issues.")
+        fix_hints.append("Common causes: unclosed string literals, missing commas in lists/dicts, incorrect indentation.")
+    if "indentation" in error_lower:
+        fix_hints.append("Indentation error. Make sure all blocks use consistent indentation (4 spaces, no tabs).")
+    if "undefined" in error_lower or "undeclared" in error_lower or "is not defined" in error_lower:
+        fix_hints.append("A variable or function is used before it is defined. Check imports and declaration order.")
+    if "type" in error_lower and "error" in error_lower:
+        fix_hints.append("Type error. Check function arguments, return types, and variable assignments.")
+    if "attribute" in error_lower:
+        fix_hints.append("AttributeError. The object does not have the property/method you are accessing. Check the API docs.")
+    if "key" in error_lower and "error" in error_lower:
+        fix_hints.append("KeyError. A dictionary key does not exist. Use .get() with a default value.")
+    if "cannot find module" in error_lower or "module not found" in error_lower:
+        fix_hints.append("Node.js module not found. Check package.json dependencies and import paths.")
+    if "jsx" in error_lower or "react" in error_lower:
+        fix_hints.append("React/JSX error. Make sure React is imported and JSX syntax is correct.")
+    if "unexpected token" in error_lower:
+        fix_hints.append("JavaScript syntax error. Check for missing semicolons, brackets, or ES module syntax issues.")
+
+    if not fix_hints:
+        fix_hints.append("Analyze the error message carefully and fix the exact issue it describes.")
+        fix_hints.append("If the error is unclear, rewrite the problematic section from scratch using the simplest correct approach.")
+
+    hint_text = "\n".join(f"- {h}" for h in fix_hints)
+
+    all_failures = ctx.get_failure_log_str(task_node.file)
+
+    content = patch_file(
+        task_node.file,
+        error=error_output,
+        review_feedback=(
+            f"LAST RESORT FIX -- attempt {task_node.failure_count}/{MAX_TASK_FAILURES}\n\n"
+            f"Error pattern analysis:\n{hint_text}\n\n"
+            f"Previous fix attempts (ALL FAILED):\n{all_failures}\n\n"
+            f"INSTRUCTIONS:\n"
+            f"1. Read the error message VERY carefully.\n"
+            f"2. Apply the specific fix hints above.\n"
+            f"3. Do NOT repeat any previous fix attempts.\n"
+            f"4. If a section of code keeps breaking, REWRITE IT completely.\n"
+            f"5. Use the simplest possible approach that solves the problem.\n"
+            f"6. Double-check every import statement.\n"
+            f"7. Output the COMPLETE corrected file."
+        ),
+        ctx=ctx,
+    )
+    write_file(output_dir, task_node.file, content)
+
+    ctx.record_failure(
+        file_path=task_node.file,
+        error=error_output,
+        fix=f"[research] Pattern-based fix: {fix_hints[0][:100]}",
+        iteration=ctx.state.iteration,
+    )
+    ctx.bump_iteration()
+
+    file_path = output_dir / task_node.file
+    _log("VERIFY", task_node.file)
+    return verify_file(file_path, output_dir)
+
+
+# =====================================================================
+# Escalation — when ALL strategies fail
+# =====================================================================
+
 def _escalate_failed_task(task_node, ctx: ContextManager, output_dir: Path) -> None:
     """
-    Handle a task that failed all fix attempts.
-    Offers 4 strategies.
+    Handle a task that failed ALL fix attempts.
+    At this point, 8 attempts with 5 strategies have been tried.
     """
     _log("ESCALATE", f"Task {task_node.id} failed after {MAX_TASK_FAILURES} attempts")
+    _log("ESCALATE", f"  Strategies tried: targeted patch, deep analysis, regeneration, simplify, research")
     _log("ESCALATE", f"  Last error: {task_node.error_summary[:150]}")
     console.print()
 
-    console.print("    [cyan]1[/cyan]  Re-generate from scratch")
-    console.print("    [cyan]2[/cyan]  Simplify (reduce scope, try again)")
+    console.print("    [cyan]1[/cyan]  Try again (reset counter, another round of fixes)")
+    console.print("    [cyan]2[/cyan]  Provide guidance (tell the AI exactly what to fix)")
     console.print("    [cyan]3[/cyan]  Skip this task and continue")
-    console.print("    [cyan]4[/cyan]  Pause — let me look at the error")
+    console.print("    [cyan]4[/cyan]  Pause -- let me edit the file manually")
     console.print()
 
-    choice = Prompt.ask("  Choose", choices=["1", "2", "3", "4"], default="1")
+    choice = Prompt.ask("  Choose", choices=["1", "2", "3", "4"], default="2")
 
     if choice == "1":
-        _escalate_regenerate(task_node, ctx, output_dir)
+        _escalate_retry(task_node, ctx, output_dir)
     elif choice == "2":
-        _escalate_simplify(task_node, ctx, output_dir)
+        _escalate_guided_fix(task_node, ctx, output_dir)
     elif choice == "3":
         task_node.status = TaskStatus.SKIPPED
         _log("SKIP", f"Task {task_node.id}: {task_node.file}")
@@ -239,76 +601,65 @@ def _escalate_failed_task(task_node, ctx: ContextManager, output_dir: Path) -> N
         _escalate_pause(task_node, ctx, output_dir)
 
 
-def _escalate_regenerate(task_node, ctx: ContextManager, output_dir: Path) -> None:
-    """Throw away all patches, regenerate from scratch."""
-    _log("REGEN", f"Task {task_node.id}: starting fresh")
-
+def _escalate_retry(task_node, ctx: ContextManager, output_dir: Path) -> None:
+    """Reset failure counter and run the full fix loop again."""
+    _log("RETRY", f"Task {task_node.id}: resetting counter for another round")
     task_node.failure_count = 0
-    task_node.error_summary = ""
-    task_node.review_feedback = ""
-    task_node.status = TaskStatus.IN_PROGRESS
-
-    task_dict = {
-        "id": task_node.id,
-        "file": task_node.file,
-        "description": task_node.description,
-        "depends_on": task_node.depends_on,
-    }
-
-    content = generate_file(task_dict, ctx)
-    write_file(output_dir, task_node.file, content)
-    task_node.status = TaskStatus.GENERATED
+    task_node.status = TaskStatus.NEEDS_FIX
 
     file_path = output_dir / task_node.file
     verification = verify_file(file_path, output_dir)
 
     if verification.passed:
         task_node.status = TaskStatus.VERIFIED
-        _log("VERIFY", f"  [cyan]passed[/cyan] on re-generation")
-    else:
-        task_node.status = TaskStatus.FAILED
-        _log("VERIFY", f"  Re-generation also failed — task marked FAILED")
-        _log("VERIFY", f"  {verification.summary[:200]}")
+        _log("VERIFY", "  [cyan]passed[/cyan]")
+        return
+
+    _multi_strategy_fix(task_node, ctx, output_dir, verification)
 
 
-def _escalate_simplify(task_node, ctx: ContextManager, output_dir: Path) -> None:
-    """Generate a minimal, simplified version of the file."""
-    _log("SIMPLIFY", f"Task {task_node.id}: generating minimal version")
+def _escalate_guided_fix(task_node, ctx: ContextManager, output_dir: Path) -> None:
+    """Let the user tell the AI exactly what to fix."""
+    console.print()
+    _log("GUIDE", f"Current error: {task_node.error_summary[:200]}")
+    console.print()
+    guidance = Prompt.ask("  What should the AI fix?")
 
-    task_node.failure_count = 0
-    task_node.status = TaskStatus.IN_PROGRESS
-
-    simplified_task = {
-        "id": task_node.id,
-        "file": task_node.file,
-        "description": (
-            f"{task_node.description}\n\n"
-            f"IMPORTANT: Previous attempts failed with: {task_node.error_summary[:300]}\n"
-            f"Generate a MINIMAL, simplified version that compiles cleanly.\n"
-            f"Use only standard library imports. Add TODO comments for complex parts.\n"
-            f"Prioritize correctness over completeness."
-        ),
-        "depends_on": task_node.depends_on,
-    }
-
-    content = generate_file(simplified_task, ctx)
+    # Apply the user guidance with a focused patch
+    content = patch_file(
+        task_node.file,
+        error=task_node.error_summary,
+        review_feedback=f"USER GUIDANCE (highest priority): {guidance}",
+        ctx=ctx,
+    )
     write_file(output_dir, task_node.file, content)
-    task_node.status = TaskStatus.GENERATED
 
     file_path = output_dir / task_node.file
     verification = verify_file(file_path, output_dir)
 
     if verification.passed:
         task_node.status = TaskStatus.VERIFIED
-        _log("VERIFY", f"  [cyan]passed[/cyan] with simplified version")
+        _log("VERIFY", "  [cyan]passed[/cyan] with user guidance")
     else:
-        task_node.status = TaskStatus.FAILED
-        _log("VERIFY", f"  Simplified version also failed — task marked FAILED")
-        _log("VERIFY", f"  {verification.summary[:200]}")
+        _log("VERIFY", f"  Still failing: {verification.summary[:200]}")
+        console.print()
+        console.print("    [cyan]1[/cyan]  Give more guidance")
+        console.print("    [cyan]2[/cyan]  Skip this task")
+        console.print("    [cyan]3[/cyan]  Pause and edit manually")
+        console.print()
+        choice = Prompt.ask("  Choose", choices=["1", "2", "3"], default="1")
+
+        if choice == "1":
+            _escalate_guided_fix(task_node, ctx, output_dir)
+        elif choice == "2":
+            task_node.status = TaskStatus.SKIPPED
+            _log("SKIP", f"Task {task_node.id}")
+        elif choice == "3":
+            _escalate_pause(task_node, ctx, output_dir)
 
 
 def _escalate_pause(task_node, ctx: ContextManager, output_dir: Path) -> None:
-    """Pause and let the user inspect the error."""
+    """Pause and let the user inspect/edit the file."""
     file_path = output_dir / task_node.file
 
     console.print()
@@ -316,48 +667,38 @@ def _escalate_pause(task_node, ctx: ContextManager, output_dir: Path) -> None:
     _log("PAUSED", f"  Error: {task_node.error_summary[:300]}")
     _log("PAUSED", f"  File:  {file_path}")
     console.print()
-
-    console.print("    [cyan]1[/cyan]  Re-verify (after manual edit)")
-    console.print("    [cyan]2[/cyan]  Provide guidance (tell the AI what to fix)")
-    console.print("    [cyan]3[/cyan]  Skip this task")
+    console.print("  [dim]Edit the file in your editor, then choose:[/dim]")
     console.print()
 
-    choice = Prompt.ask("  Choose", choices=["1", "2", "3"], default="1")
+    console.print("    [cyan]1[/cyan]  Re-verify (after manual edit)")
+    console.print("    [cyan]2[/cyan]  Skip this task")
+    console.print()
+
+    choice = Prompt.ask("  Choose", choices=["1", "2"], default="1")
 
     if choice == "1":
+        # Re-read the file from disk (user may have edited it)
+        try:
+            content = file_path.read_text()
+            ctx.record_file(task_node.file, content)
+        except Exception:
+            pass
+
         verification = verify_file(file_path, output_dir)
         if verification.passed:
             task_node.status = TaskStatus.VERIFIED
-            _log("VERIFY", f"  [cyan]passed[/cyan] after manual edit")
+            _log("VERIFY", "  [cyan]passed[/cyan] after manual edit")
         else:
-            task_node.status = TaskStatus.FAILED
             _log("VERIFY", f"  Still failing: {verification.summary[:200]}")
-
-    elif choice == "2":
-        guidance = Prompt.ask("  What should the AI fix?")
-        task_node.failure_count = 0
-        task_node.status = TaskStatus.NEEDS_FIX
-
-        content = patch_file(
-            task_node.file,
-            error=task_node.error_summary,
-            review_feedback=f"User guidance: {guidance}",
-            ctx=ctx,
-        )
-        write_file(output_dir, task_node.file, content)
-
-        verification = verify_file(file_path, output_dir)
-        if verification.passed:
-            task_node.status = TaskStatus.VERIFIED
-            _log("VERIFY", f"  [cyan]passed[/cyan] with user guidance")
-        else:
             task_node.status = TaskStatus.FAILED
-            _log("VERIFY", f"  Still failing — task marked FAILED")
-
-    elif choice == "3":
+    elif choice == "2":
         task_node.status = TaskStatus.SKIPPED
         _log("SKIP", f"Task {task_node.id}")
 
+
+# =====================================================================
+# Progress display
+# =====================================================================
 
 def _show_task_progress(ctx: ContextManager) -> None:
     """Show a compact task status table."""
@@ -374,7 +715,8 @@ def _show_task_progress(ctx: ContextManager) -> None:
             TaskStatus.FAILED:      "[red]failed[/red]",
             TaskStatus.SKIPPED:     "[dim]skipped[/dim]",
         }.get(t.status, "[dim]?[/dim]")
-        console.print(f"  {status_label:>30}  {t.id}. {t.file}")
+        fails = f" [dim]({t.failure_count} fixes)[/dim]" if t.failure_count > 0 else ""
+        console.print(f"  {status_label:>30}  {t.id}. {t.file}{fails}")
     console.print()
 
 

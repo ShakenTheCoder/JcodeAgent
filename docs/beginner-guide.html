@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>JCode — Beginner Guide</title>
+    <style>
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+        :root {
+            --font-mono: 'SF Mono', 'Fira Code', 'JetBrains Mono', 'Cascadia Code', 'Consolas', monospace;
+            --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            --transition: 0.3s ease;
+        }
+        [data-theme="dark"] {
+            --bg: #050508; --bg-card: #0c0c12; --bg-terminal: #0a0e17;
+            --text: #d4d4d8; --text-dim: #52525b; --accent: #22d3ee;
+            --accent-dim: rgba(34,211,238,0.08); --accent-glow: rgba(34,211,238,0.2);
+            --border: #1a1a2e; --border-glow: rgba(34,211,238,0.15);
+        }
+        [data-theme="light"] {
+            --bg: #f8fafc; --bg-card: #ffffff; --bg-terminal: #f1f5f9;
+            --text: #1e293b; --text-dim: #64748b; --accent: #0891b2;
+            --accent-dim: rgba(8,145,178,0.06); --accent-glow: rgba(8,145,178,0.15);
+            --border: #e2e8f0; --border-glow: rgba(8,145,178,0.1);
+        }
+        body { font-family: var(--font-sans); background: var(--bg); color: var(--text); line-height: 1.8; transition: background var(--transition), color var(--transition); }
+        a { color: var(--accent); text-decoration: none; }
+        a:hover { text-decoration: underline; }
+        .container { max-width: 780px; margin: 0 auto; padding: 0 2rem; }
+
+        /* Theme Toggle */
+        .theme-switch { position: fixed; top: 1.5rem; right: 1.5rem; z-index: 100; display: flex; align-items: center; gap: 0.5rem; }
+        .switch { position: relative; width: 48px; height: 26px; }
+        .switch input { opacity: 0; width: 0; height: 0; }
+        .switch .slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background: var(--border); border: 1px solid var(--border-glow); border-radius: 26px; transition: all var(--transition); }
+        .switch .slider::before { content: ''; position: absolute; height: 20px; width: 20px; left: 2px; bottom: 2px; background: var(--accent); border-radius: 50%; transition: all var(--transition); box-shadow: 0 0 8px var(--accent-glow); }
+        .switch input:checked + .slider::before { transform: translateX(22px); }
+        .switch-icon { font-size: 0.85rem; }
+
+        nav { padding: 1.5rem 0; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--border); margin-bottom: 3rem; }
+        .nav-logo { font-size: 1.1rem; font-weight: 700; color: var(--accent); font-family: var(--font-mono); }
+        .nav-links { display: flex; gap: 1.5rem; }
+        .nav-links a { color: var(--text-dim); font-size: 0.8rem; font-family: var(--font-mono); }
+        .nav-links a:hover { color: var(--accent); text-decoration: none; }
+
+        h1 { font-size: 2rem; font-weight: 700; margin-bottom: 0.5rem; }
+        h1 .accent { color: var(--accent); }
+        .hero-sub { color: var(--text-dim); font-size: 1rem; margin-bottom: 3rem; }
+
+        h2 { font-size: 1.3rem; font-weight: 700; margin-top: 3rem; margin-bottom: 1rem; padding-bottom: 0.5rem; border-bottom: 1px solid var(--border); }
+        h3 { font-size: 1.05rem; font-weight: 600; margin-top: 1.5rem; margin-bottom: 0.5rem; color: var(--accent); }
+
+        p { margin-bottom: 1rem; }
+        ul, ol { margin-bottom: 1rem; padding-left: 1.5rem; }
+        li { margin-bottom: 0.3rem; }
+
+        code {
+            font-family: var(--font-mono); font-size: 0.85em;
+            background: var(--bg-terminal); padding: 0.15rem 0.4rem;
+            border-radius: 4px; border: 1px solid var(--border);
+        }
+        pre {
+            background: var(--bg-terminal); border: 1px solid var(--border);
+            border-radius: 10px; padding: 1.2rem 1.5rem;
+            overflow-x: auto; margin-bottom: 1.5rem;
+            font-family: var(--font-mono); font-size: 0.85rem;
+            line-height: 1.6;
+        }
+        pre code { background: none; border: none; padding: 0; }
+
+        .callout {
+            background: var(--accent-dim); border-left: 3px solid var(--accent);
+            padding: 1rem 1.2rem; border-radius: 0 8px 8px 0;
+            margin-bottom: 1.5rem; font-size: 0.9rem;
+        }
+        .callout strong { color: var(--accent); }
+
+        .step-grid {
+            display: grid; grid-template-columns: 40px 1fr;
+            gap: 0 1rem; margin-bottom: 1.5rem;
+        }
+        .step-num {
+            font-family: var(--font-mono); font-size: 0.8rem;
+            color: var(--accent); font-weight: 700;
+            padding-top: 0.15rem;
+        }
+
+        footer { border-top: 1px solid var(--border); padding: 2rem 0; text-align: center; color: var(--text-dim); font-size: 0.75rem; font-family: var(--font-mono); margin-top: 4rem; }
+
+        @media (max-width: 600px) { .container { padding: 0 1rem; } }
+    </style>
+</head>
+<body>
+
+<div class="theme-switch">
+    <span class="switch-icon">&#9788;</span>
+    <label class="switch"><input type="checkbox" id="theme-checkbox" onchange="toggleTheme()"><span class="slider"></span></label>
+    <span class="switch-icon">&#9790;</span>
+</div>
+
+<div class="container">
+    <nav>
+        <a class="nav-logo" href="index.html">&gt; jcode</a>
+        <div class="nav-links">
+            <a href="index.html">Home</a>
+            <a href="technical.html">Technical Docs</a>
+            <a href="https://github.com/ShakenTheCoder/JcodeAgent" target="_blank">GitHub</a>
+        </div>
+    </nav>
+
+    <h1>Beginner <span class="accent">Guide</span></h1>
+    <p class="hero-sub">Everything you need to get started with JCode &mdash; from installation to your first project.</p>
+
+    <!-- Prerequisites -->
+    <h2>Prerequisites</h2>
+    <p>Before installing JCode, make sure you have:</p>
+    <ul>
+        <li><strong>Python 3.10+</strong> &mdash; Check with <code>python3 --version</code></li>
+        <li><strong>Ollama</strong> &mdash; Install from <a href="https://ollama.ai" target="_blank">ollama.ai</a></li>
+        <li><strong>8GB+ RAM</strong> &mdash; For running 14B parameter models locally</li>
+        <li><strong>20GB+ disk space</strong> &mdash; For the two AI models (~7GB each)</li>
+    </ul>
+
+    <div class="callout">
+        <strong>Note:</strong> JCode runs entirely on your machine. No API keys, no cloud accounts, and no internet connection required after installation.
+    </div>
+
+    <!-- Installation -->
+    <h2>Installation</h2>
+    <h3>One-command install (recommended)</h3>
+    <p>Mac / Linux:</p>
+    <pre><code>curl -fsSL https://raw.githubusercontent.com/ShakenTheCoder/JcodeAgent/main/install.sh | bash</code></pre>
+    <p>Windows (PowerShell):</p>
+    <pre><code>iwr -useb https://raw.githubusercontent.com/ShakenTheCoder/JcodeAgent/main/install.ps1 | iex</code></pre>
+    <p>The installer will:</p>
+    <ol>
+        <li>Clone the JCode repository</li>
+        <li>Create a Python virtual environment</li>
+        <li>Install all dependencies</li>
+        <li>Pull the required AI models (deepseek-r1:14b + qwen2.5-coder:14b)</li>
+        <li>Add <code>jcode</code> to your PATH</li>
+    </ol>
+
+    <h3>Manual install</h3>
+    <pre><code>git clone https://github.com/ShakenTheCoder/JcodeAgent.git
+cd JcodeAgent
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e .
+ollama pull deepseek-r1:14b
+ollama pull qwen2.5-coder:14b</code></pre>
+
+    <!-- First Launch -->
+    <h2>First Launch</h2>
+    <p>Start JCode by typing:</p>
+    <pre><code>jcode</code></pre>
+    <p>On your first run, JCode will ask for two permissions:</p>
+    <ul>
+        <li><strong>Autonomous file access</strong> &mdash; Lets JCode read and write files in your project directories</li>
+        <li><strong>Internet access</strong> &mdash; Lets JCode search the web for documentation and solutions</li>
+    </ul>
+    <p>Both are optional. You only get asked once &mdash; your choices are saved permanently.</p>
+
+    <!-- Your First Project -->
+    <h2>Your First Project</h2>
+    <p>Here is a step-by-step walkthrough of building your first project:</p>
+
+    <div class="step-grid">
+        <div class="step-num">01</div>
+        <div>
+            <p><strong>Start JCode and type your project idea:</strong></p>
+            <pre><code>jcode> build a todo app with Flask and SQLite</code></pre>
+        </div>
+
+        <div class="step-num">02</div>
+        <div>
+            <p><strong>JCode plans the architecture.</strong> The Planner breaks down your idea into a dependency-ordered task graph. You will see something like:</p>
+            <pre><code>12:04:01  PHASE 1   Planning project architecture
+12:04:12  PLAN      5 task(s) created</code></pre>
+        </div>
+
+        <div class="step-num">03</div>
+        <div>
+            <p><strong>JCode generates and reviews each file.</strong> Every file goes through: generate &rarr; review &rarr; verify. If anything fails, the fix engine kicks in automatically.</p>
+            <pre><code>12:04:15  GENERATE  app.py
+12:04:22  REVIEW    Approved
+12:04:23  VERIFY    passed</code></pre>
+        </div>
+
+        <div class="step-num">04</div>
+        <div>
+            <p><strong>Build complete.</strong> Once all files pass, you drop into the project REPL:</p>
+            <pre><code>12:05:10  DONE      Build complete -- all files verified
+
+todo-app></code></pre>
+        </div>
+
+        <div class="step-num">05</div>
+        <div>
+            <p><strong>Chat naturally to iterate.</strong> Add features, fix bugs, or ask questions:</p>
+            <pre><code>todo-app> add user authentication with password hashing
+todo-app> why did you use Flask-Login instead of JWT?
+todo-app> make the UI look more modern</code></pre>
+        </div>
+
+        <div class="step-num">06</div>
+        <div>
+            <p><strong>Run your project.</strong> Type <code>run</code> and JCode auto-detects the right command:</p>
+            <pre><code>todo-app> run
+Running: python app.py
+ * Running on http://127.0.0.1:5000</code></pre>
+        </div>
+    </div>
+
+    <!-- Chat Mode -->
+    <h2>Chat Mode</h2>
+    <p>Once inside a project, everything is natural language. JCode detects your intent automatically:</p>
+    <ul>
+        <li><strong>Action requests</strong> &mdash; "add a search bar", "fix the login bug", "refactor the database layer" &rarr; JCode modifies files</li>
+        <li><strong>Questions</strong> &mdash; "how does the routing work?", "explain the auth flow" &rarr; JCode answers without changing files</li>
+        <li><strong>Run/Deploy</strong> &mdash; "how do I run this?", "how do I deploy to Vercel?" &rarr; JCode gives step-by-step commands</li>
+    </ul>
+
+    <!-- Reserved Commands -->
+    <h2>Reserved Commands</h2>
+    <p>These are the only special commands. Everything else is natural language:</p>
+    <pre><code>run       Run the project (auto-detects framework)
+plan      Show the current task plan
+files     List all project files
+tree      Show directory tree
+rebuild   Re-run the full build pipeline
+back      Return to home screen
+clear     Clear the terminal
+help      Show help</code></pre>
+
+    <!-- Tips -->
+    <h2>Tips &amp; Best Practices</h2>
+    <ul>
+        <li><strong>Be specific.</strong> "Build a REST API with FastAPI, PostgreSQL, JWT auth, and Docker" gives better results than "build an API".</li>
+        <li><strong>Iterate in small steps.</strong> After the initial build, add features one at a time rather than asking for everything at once.</li>
+        <li><strong>Use <code>run</code> often.</strong> Test after every change. JCode auto-installs dependencies when needed.</li>
+        <li><strong>Ask questions.</strong> If something is unclear, ask JCode to explain. It has full context of your project.</li>
+        <li><strong>Trust the fix engine.</strong> If a file fails verification, JCode has 8 attempts with 5 different strategies. Let it work.</li>
+        <li><strong>Save your progress.</strong> Sessions auto-save. You can close JCode and resume later &mdash; your project and chat history are preserved.</li>
+    </ul>
+
+    <!-- Troubleshooting -->
+    <h2>Troubleshooting</h2>
+    <h3>Ollama not found</h3>
+    <p>Make sure Ollama is running: <code>ollama serve</code>. If not installed, get it from <a href="https://ollama.ai" target="_blank">ollama.ai</a>.</p>
+
+    <h3>Models not downloaded</h3>
+    <p>Pull both models manually:</p>
+    <pre><code>ollama pull deepseek-r1:14b
+ollama pull qwen2.5-coder:14b</code></pre>
+
+    <h3>Out of memory</h3>
+    <p>14B models need ~8GB RAM. Close other applications, or use smaller models by editing <code>jcode/config.py</code>:</p>
+    <pre><code>PLANNER_MODEL = "deepseek-r1:7b"
+CODER_MODEL = "qwen2.5-coder:7b"</code></pre>
+
+    <h3>Permission denied</h3>
+    <p>Reset permissions by deleting <code>~/.jcode/settings.json</code>. JCode will ask again on next launch.</p>
+
+    <h3>Build keeps failing</h3>
+    <p>If the 8-attempt fix engine cannot resolve an issue, JCode will pause and ask for guidance. You can:</p>
+    <ul>
+        <li>Provide a hint about what is wrong</li>
+        <li>Skip the problematic file</li>
+        <li>Retry with a fresh attempt</li>
+    </ul>
+</div>
+
+<footer>
+    <div class="container">
+        <p>JCode &middot; <a href="index.html">Home</a> &middot; <a href="technical.html">Technical Docs</a> &middot; <a href="https://github.com/ShakenTheCoder/JcodeAgent">GitHub</a></p>
+    </div>
+</footer>
+
+<script>
+function toggleTheme() {
+    const cb = document.getElementById('theme-checkbox');
+    document.documentElement.setAttribute('data-theme', cb.checked ? 'light' : 'dark');
+    localStorage.setItem('jcode-theme', cb.checked ? 'light' : 'dark');
+}
+(function() {
+    if (localStorage.getItem('jcode-theme') === 'light') {
+        document.documentElement.setAttribute('data-theme', 'light');
+        document.getElementById('theme-checkbox').checked = true;
+    }
+})();
+</script>
+</body>
+</html>
