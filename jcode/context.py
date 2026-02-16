@@ -37,6 +37,7 @@ class ContextManager:
         self.coder_history: list[dict[str, str]] = []
         self.reviewer_history: list[dict[str, str]] = []
         self.analyzer_history: list[dict[str, str]] = []
+        self.chat_history: list[dict[str, str]] = []    # per-project chat
         self._task_dag: list[TaskNode] = []
 
     # ── Plan & State ───────────────────────────────────────────────
@@ -199,6 +200,31 @@ class ContextManager:
     def reset_coder_history(self):
         self.reset_channel("coder")
 
+    # ── Chat history (per-project conversation) ───────────────────
+
+    def add_chat(self, role: str, content: str) -> None:
+        """Add a message to the project chat history."""
+        self.chat_history.append({"role": role, "content": content})
+
+    def get_chat_messages(self) -> list[dict[str, str]]:
+        """Return the full chat history for this project."""
+        return list(self.chat_history)
+
+    def get_project_summary_for_chat(self) -> str:
+        """Build a context string describing the project for chat interactions."""
+        parts = [
+            f"Project: {self.state.name}",
+            f"Description: {self.state.description}",
+            f"Tech stack: {', '.join(self.state.tech_stack)}",
+            f"Architecture: {self.state.architecture_summary or 'N/A'}",
+            "",
+            "Files:",
+        ]
+        for path, purpose in (self.state.file_index or {}).items():
+            parts.append(f"  - {path}: {purpose}")
+
+        return "\n".join(parts)
+
     # ── File context (sliced, not dumped) ──────────────────────────
 
     def get_file_context(self, rel_paths: list[str]) -> str:
@@ -264,6 +290,7 @@ class ContextManager:
             },
             "planner_history": self.planner_history,
             "coder_history": self.coder_history,
+            "chat_history": self.chat_history,
         }
         path.write_text(json.dumps(data, indent=2))
 
@@ -295,4 +322,5 @@ class ContextManager:
         ctx._task_dag = [TaskNode.from_dict(d) for d in s.get("task_nodes", [])]
         ctx.planner_history = data.get("planner_history", [])
         ctx.coder_history = data.get("coder_history", [])
+        ctx.chat_history = data.get("chat_history", [])
         return ctx

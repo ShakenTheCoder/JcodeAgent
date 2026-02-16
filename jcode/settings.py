@@ -16,13 +16,18 @@ class UserSettings:
     default_output_dir: str = "~/jcode_projects"
     auto_save_sessions: bool = True
     last_project: str = ""
+    autonomous_access: bool | None = None   # None = never asked
+    internet_access: bool | None = None     # None = never asked
     
     def to_dict(self) -> dict:
         return asdict(self)
     
     @classmethod
     def from_dict(cls, data: dict) -> UserSettings:
-        return cls(**data)
+        # Filter to known fields only for forward-compat
+        known = {f.name for f in cls.__dataclass_fields__.values()}
+        filtered = {k: v for k, v in data.items() if k in known}
+        return cls(**filtered)
 
 
 class SettingsManager:
