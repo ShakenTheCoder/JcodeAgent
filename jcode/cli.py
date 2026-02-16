@@ -337,7 +337,8 @@ def _cmd_build(
 
     # -- Create context
     state = ProjectState(
-        prompt=prompt,
+        name=slug,
+        description=prompt,
         output_dir=output_dir,
         complexity=complexity,
     )
