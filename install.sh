@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ──────────────────────────────────────────────────────────────────
 # JCode Universal Installer
-# One command. Installs everything. You're welcome. 🤖
+# One command. Installs everything.
 #
 # Usage:
 #   curl -fsSL https://jcode.dev/install.sh | bash
@@ -34,11 +34,11 @@ MIN_PYTHON="3.10"
 MODELS=("deepseek-r1:14b" "qwen2.5-coder:14b")
 
 # ── Helpers ────────────────────────────────────────────────────────
-info()    { echo -e "${BLUE}ℹ${NC}  $*"; }
-success() { echo -e "${GREEN}✅${NC} $*"; }
-warn()    { echo -e "${YELLOW}⚠${NC}  $*"; }
-fail()    { echo -e "${RED}❌${NC} $*"; exit 1; }
-step()    { echo -e "\n${BOLD}${CYAN}── $* ──${NC}"; }
+info()    { echo -e "${CYAN}[i]${NC} $*"; }
+success() { echo -e "${GREEN}[+]${NC} $*"; }
+warn()    { echo -e "${YELLOW}[!]${NC} $*"; }
+fail()    { echo -e "${RED}[x]${NC} $*"; exit 1; }
+step()    { echo -e "\n${BOLD}${CYAN}== $* ==${NC}"; }
 
 command_exists() { command -v "$1" &>/dev/null; }
 
@@ -73,7 +73,7 @@ banner() {
      ║║  ║ ║ ║║║╣
     ╚╝╚═╝╚═╝═╩╝╚═╝  Installer
 
-    One command. Everything you need. 🤖
+    One command. Everything you need.
 
 EOF
     echo -e "${NC}"
@@ -344,7 +344,7 @@ print_summary() {
     cat << 'EOF'
   ╔══════════════════════════════════════════╗
   ║                                          ║
-  ║   JCode is ready! 🚀                    ║
+  ║   JCode is ready!                        ║
   ║                                          ║
   ╚══════════════════════════════════════════╝
 EOF
@@ -363,10 +363,10 @@ EOF
     echo -e "    ${DIM}jcode>${NC} build a todo list web app"
     echo ""
     echo -e "  ${BOLD}Installed:${NC}"
-    echo -e "    ✅ Python    $(${PYTHON_CMD} --version 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')"
-    echo -e "    ✅ Ollama    $(ollama --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || echo 'installed')"
-    echo -e "    ✅ Models    ${MODELS[*]}"
-    echo -e "    ✅ JCode     $JCODE_HOME"
+    echo -e "    [+] Python    $(${PYTHON_CMD} --version 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')"
+    echo -e "    [+] Ollama    $(ollama --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || echo 'installed')"
+    echo -e "    [+] Models    ${MODELS[*]}"
+    echo -e "    [+] JCode     $JCODE_HOME"
     echo ""
 }
 

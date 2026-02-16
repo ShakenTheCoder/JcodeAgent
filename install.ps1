@@ -1,6 +1,6 @@
 # ──────────────────────────────────────────────────────────────────
 # JCode Universal Installer for Windows
-# One command. Installs everything. You're welcome. 🤖
+# One command. Installs everything.
 #
 # Usage:
 #   iwr -useb https://jcode.dev/install.ps1 | iex
@@ -24,11 +24,11 @@ $MODELS      = @("deepseek-r1:14b", "qwen2.5-coder:14b")
 $PYTHON_CMD  = ""
 
 # ── Helpers ────────────────────────────────────────────────────────
-function Write-Info    { param($msg) Write-Host "i  $msg" -ForegroundColor Blue }
-function Write-Success { param($msg) Write-Host "✅ $msg" -ForegroundColor Green }
-function Write-Warn    { param($msg) Write-Host "⚠  $msg" -ForegroundColor Yellow }
-function Write-Fail    { param($msg) Write-Host "❌ $msg" -ForegroundColor Red; exit 1 }
-function Write-Step    { param($msg) Write-Host "`n── $msg ──" -ForegroundColor Cyan }
+function Write-Info    { param($msg) Write-Host "[i] $msg" -ForegroundColor Cyan }
+function Write-Success { param($msg) Write-Host "[+] $msg" -ForegroundColor Green }
+function Write-Warn    { param($msg) Write-Host "[!] $msg" -ForegroundColor Yellow }
+function Write-Fail    { param($msg) Write-Host "[x] $msg" -ForegroundColor Red; exit 1 }
+function Write-Step    { param($msg) Write-Host "`n== $msg ==" -ForegroundColor Cyan }
 
 function Test-Command { param($cmd) return [bool](Get-Command $cmd -ErrorAction SilentlyContinue) }
 
@@ -39,7 +39,7 @@ function Show-Banner {
     Write-Host "     ║║  ║ ║ ║║║╣"   -ForegroundColor Cyan
     Write-Host "    ╚╝╚═╝╚═╝═╩╝╚═╝  Installer" -ForegroundColor Cyan
     Write-Host ""
-    Write-Host "    One command. Everything you need. 🤖" -ForegroundColor White
+    Write-Host "    One command. Everything you need." -ForegroundColor White
     Write-Host ""
 }
 
@@ -292,7 +292,7 @@ function Show-Summary {
     Write-Host ""
     Write-Host "  ╔══════════════════════════════════════════╗" -ForegroundColor Green
     Write-Host "  ║                                          ║" -ForegroundColor Green
-    Write-Host "  ║   JCode is ready! 🚀                    ║" -ForegroundColor Green
+    Write-Host "  ║   JCode is ready!                        ║" -ForegroundColor Green
     Write-Host "  ║                                          ║" -ForegroundColor Green
     Write-Host "  ╚══════════════════════════════════════════╝" -ForegroundColor Green
     Write-Host ""
@@ -318,10 +318,10 @@ function Show-Summary {
     } catch { $pyVer = "installed" }
 
     Write-Host "  Installed:" -ForegroundColor White
-    Write-Host "    ✅ Python    $pyVer" -ForegroundColor Green
-    Write-Host "    ✅ Ollama    installed" -ForegroundColor Green
-    Write-Host "    ✅ Models    $($MODELS -join ', ')" -ForegroundColor Green
-    Write-Host "    ✅ JCode     $JCODE_HOME" -ForegroundColor Green
+    Write-Host "    [+] Python    $pyVer" -ForegroundColor Green
+    Write-Host "    [+] Ollama    installed" -ForegroundColor Green
+    Write-Host "    [+] Models    $($MODELS -join ', ')" -ForegroundColor Green
+    Write-Host "    [+] JCode     $JCODE_HOME" -ForegroundColor Green
     Write-Host ""
 }
 
