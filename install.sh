@@ -4,7 +4,7 @@
 # One command. Installs everything.
 #
 # Usage:
-#   curl -fsSL https://jcode.dev/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/ShakenTheCoder/JcodeAgent/main/install.sh | bash
 #
 # What it does (only if not already installed):
 #   1. Installs Python 3.12+
@@ -25,7 +25,7 @@ BLUE='\033[0;34m'
 CYAN='\033[0;36m'
 BOLD='\033[1m'
 DIM='\033[2m'
-NC='\033[0m' # No Color
+NC='\033[0m'
 
 # ── Globals ────────────────────────────────────────────────────────
 JCODE_HOME="${JCODE_HOME:-$HOME/JcodeAgent}"
@@ -33,16 +33,42 @@ JCODE_REPO="https://github.com/ShakenTheCoder/JcodeAgent.git"
 MIN_PYTHON="3.10"
 MODELS=("deepseek-r1:14b" "qwen2.5-coder:14b")
 
+# ── Spinner ────────────────────────────────────────────────────────
+_spinner_pid=""
+
+spin_start() {
+    local msg="$1"
+    local frames=("⠋" "⠙" "⠹" "⠸" "⠼" "⠴" "⠦" "⠧" "⠇" "⠏")
+    (
+        while true; do
+            for f in "${frames[@]}"; do
+                printf "\r  ${CYAN}%s${NC} ${DIM}%s${NC}" "$f" "$msg"
+                sleep 0.08
+            done
+        done
+    ) &
+    _spinner_pid=$!
+    disown "$_spinner_pid" 2>/dev/null
+}
+
+spin_stop() {
+    if [[ -n "$_spinner_pid" ]]; then
+        kill "$_spinner_pid" 2>/dev/null
+        wait "$_spinner_pid" 2>/dev/null || true
+        _spinner_pid=""
+        printf "\r\033[2K"
+    fi
+}
+
 # ── Helpers ────────────────────────────────────────────────────────
-info()    { echo -e "${CYAN}[i]${NC} $*"; }
-success() { echo -e "${GREEN}[+]${NC} $*"; }
-warn()    { echo -e "${YELLOW}[!]${NC} $*"; }
-fail()    { echo -e "${RED}[x]${NC} $*"; exit 1; }
-step()    { echo -e "\n${BOLD}${CYAN}== $* ==${NC}"; }
+ok()      { echo -e "  ${GREEN}✓${NC} $*"; }
+info()    { echo -e "  ${DIM}$*${NC}"; }
+warn()    { echo -e "  ${YELLOW}!${NC} $*"; }
+fail()    { spin_stop; echo -e "  ${RED}✗${NC} $*"; exit 1; }
+section() { echo -e "\n  ${BOLD}${CYAN}$*${NC}\n"; }
 
 command_exists() { command -v "$1" &>/dev/null; }
 
-# Compare semver: returns 0 if $1 >= $2
 version_gte() {
     printf '%s\n%s' "$2" "$1" | sort -V -C
 }
@@ -64,30 +90,47 @@ detect_arch() {
     esac
 }
 
+# ── Progress bar ───────────────────────────────────────────────────
+progress_bar() {
+    local current=$1 total=$2 label=$3
+    local width=30
+    local pct=$((current * 100 / total))
+    local filled=$((current * width / total))
+    local empty=$((width - filled))
+    local bar=""
+    for ((i=0; i<filled; i++)); do bar+="█"; done
+    for ((i=0; i<empty; i++)); do bar+="░"; done
+    printf "\r  ${DIM}%s${NC} ${CYAN}%s${NC} ${DIM}%d%%${NC}" "$label" "$bar" "$pct"
+}
+
 # ── Banner ─────────────────────────────────────────────────────────
 banner() {
+    echo ""
     echo -e "${BOLD}${CYAN}"
     cat << 'EOF'
-
-     ╦╔═╗╔═╗╔╦╗╔═╗
-     ║║  ║ ║ ║║║╣
-    ╚╝╚═╝╚═╝═╩╝╚═╝  Installer
-
-    One command. Everything you need.
-
+     ██╗ ██████╗ ██████╗ ██████╗ ███████╗
+     ██║██╔════╝██╔═══██╗██╔══██╗██╔════╝
+     ██║██║     ██║   ██║██║  ██║█████╗
+██   ██║██║     ██║   ██║██║  ██║██╔══╝
+╚█████╔╝╚██████╗╚██████╔╝██████╔╝███████╗
+ ╚════╝  ╚═════╝ ╚═════╝ ╚═════╝ ╚══════╝
 EOF
     echo -e "${NC}"
+    echo -e "  ${DIM}Your local, unlimited & private software engineer${NC}"
+    echo -e "  ${DIM}One command. Everything you need.${NC}"
+    echo ""
+    echo -e "  ${DIM}─────────────────────────────────────────────────${NC}"
+    echo ""
 }
 
 # ══════════════════════════════════════════════════════════════════
 # Step 1: Python
 # ══════════════════════════════════════════════════════════════════
 install_python() {
-    step "Checking Python"
+    section "Python"
 
     local python_cmd=""
 
-    # Find a suitable Python
     for cmd in python3 python python3.12 python3.11 python3.10; do
         if command_exists "$cmd"; then
             local ver
@@ -96,7 +139,7 @@ install_python() {
             major_minor=$(echo "$ver" | cut -d. -f1-2)
             if version_gte "$major_minor" "$MIN_PYTHON"; then
                 python_cmd="$cmd"
-                success "Python $ver found ($cmd)"
+                ok "Python $ver"
                 break
             fi
         fi
@@ -111,53 +154,58 @@ install_python() {
         case "$os" in
             macos)
                 if command_exists brew; then
-                    info "Installing Python via Homebrew..."
-                    brew install python@3.12
+                    spin_start "Installing Python via Homebrew..."
+                    brew install python@3.12 &>/dev/null
+                    spin_stop
                 else
-                    info "Installing Homebrew first..."
-                    /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-                    # Add Homebrew to PATH for this session
+                    spin_start "Installing Homebrew..."
+                    /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" &>/dev/null
+                    spin_stop
                     if [[ -f "/opt/homebrew/bin/brew" ]]; then
                         eval "$(/opt/homebrew/bin/brew shellenv)"
                     elif [[ -f "/usr/local/bin/brew" ]]; then
                         eval "$(/usr/local/bin/brew shellenv)"
                     fi
-                    brew install python@3.12
+                    spin_start "Installing Python via Homebrew..."
+                    brew install python@3.12 &>/dev/null
+                    spin_stop
                 fi
                 python_cmd="python3"
                 ;;
             linux)
                 if command_exists apt-get; then
-                    info "Installing Python via apt..."
-                    sudo apt-get update -qq
-                    sudo apt-get install -y -qq python3 python3-venv python3-pip
+                    spin_start "Installing Python via apt..."
+                    sudo apt-get update -qq &>/dev/null
+                    sudo apt-get install -y -qq python3 python3-venv python3-pip &>/dev/null
+                    spin_stop
                 elif command_exists dnf; then
-                    info "Installing Python via dnf..."
-                    sudo dnf install -y python3 python3-pip
+                    spin_start "Installing Python via dnf..."
+                    sudo dnf install -y python3 python3-pip &>/dev/null
+                    spin_stop
                 elif command_exists pacman; then
-                    info "Installing Python via pacman..."
-                    sudo pacman -Sy --noconfirm python python-pip
+                    spin_start "Installing Python via pacman..."
+                    sudo pacman -Sy --noconfirm python python-pip &>/dev/null
+                    spin_stop
                 elif command_exists apk; then
-                    info "Installing Python via apk..."
-                    sudo apk add python3 py3-pip
+                    spin_start "Installing Python via apk..."
+                    sudo apk add python3 py3-pip &>/dev/null
+                    spin_stop
                 else
-                    fail "Could not detect package manager. Please install Python $MIN_PYTHON+ manually:\n   https://www.python.org/downloads/"
+                    fail "Could not detect package manager. Install Python $MIN_PYTHON+ manually: https://www.python.org/downloads/"
                 fi
                 python_cmd="python3"
                 ;;
             *)
-                fail "Unsupported OS. Please install Python $MIN_PYTHON+ manually:\n   https://www.python.org/downloads/"
+                fail "Unsupported OS. Install Python $MIN_PYTHON+ manually: https://www.python.org/downloads/"
                 ;;
         esac
 
-        # Verify installation
         if ! command_exists "$python_cmd"; then
-            fail "Python installation failed. Please install manually:\n   https://www.python.org/downloads/"
+            fail "Python installation failed. Install manually: https://www.python.org/downloads/"
         fi
-        success "Python installed: $($python_cmd --version)"
+        ok "Python installed: $($python_cmd --version 2>&1 | grep -oE '[0-9]+\.[0-9]+')"
     fi
 
-    # Export for later steps
     PYTHON_CMD="$python_cmd"
 }
 
@@ -165,10 +213,10 @@ install_python() {
 # Step 2: Ollama
 # ══════════════════════════════════════════════════════════════════
 install_ollama() {
-    step "Checking Ollama"
+    section "Ollama"
 
     if command_exists ollama; then
-        success "Ollama already installed: $(ollama --version 2>/dev/null || echo 'version unknown')"
+        ok "Ollama $(ollama --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || echo 'installed')"
     else
         warn "Ollama not found. Installing..."
 
@@ -178,25 +226,29 @@ install_ollama() {
         case "$os" in
             macos)
                 if command_exists brew; then
-                    brew install ollama
+                    spin_start "Installing Ollama via Homebrew..."
+                    brew install ollama &>/dev/null
+                    spin_stop
                 else
-                    info "Downloading Ollama for macOS..."
-                    curl -fsSL https://ollama.ai/install.sh | sh
+                    spin_start "Downloading Ollama..."
+                    curl -fsSL https://ollama.ai/install.sh | sh &>/dev/null
+                    spin_stop
                 fi
                 ;;
             linux)
-                info "Downloading Ollama for Linux..."
-                curl -fsSL https://ollama.ai/install.sh | sh
+                spin_start "Downloading Ollama..."
+                curl -fsSL https://ollama.ai/install.sh | sh &>/dev/null
+                spin_stop
                 ;;
             *)
-                fail "Please install Ollama manually:\n   https://ollama.ai/download"
+                fail "Please install Ollama manually: https://ollama.ai/download"
                 ;;
         esac
 
         if ! command_exists ollama; then
-            fail "Ollama installation failed. Install manually:\n   https://ollama.ai/download"
+            fail "Ollama installation failed. Install manually: https://ollama.ai/download"
         fi
-        success "Ollama installed"
+        ok "Ollama installed"
     fi
 }
 
@@ -204,39 +256,45 @@ install_ollama() {
 # Step 3: Start Ollama & pull models
 # ══════════════════════════════════════════════════════════════════
 setup_models() {
-    step "Checking AI models"
+    section "AI Models"
 
     # Make sure Ollama is running
     if ! curl -sf http://localhost:11434/api/tags &>/dev/null; then
-        info "Starting Ollama server..."
+        spin_start "Starting Ollama server..."
         ollama serve &>/dev/null &
         OLLAMA_PID=$!
 
-        # Wait for it to come up
         local retries=0
         while ! curl -sf http://localhost:11434/api/tags &>/dev/null; do
             retries=$((retries + 1))
             if [[ $retries -gt 30 ]]; then
+                spin_stop
                 fail "Ollama failed to start. Try running 'ollama serve' manually."
             fi
             sleep 1
         done
-        success "Ollama server started"
+        spin_stop
+        ok "Ollama server started"
     else
-        success "Ollama server already running"
+        ok "Ollama server running"
     fi
 
-    # Pull each model if not already present
+    # Pull each model
     local installed_models
     installed_models=$(ollama list 2>/dev/null | tail -n +2 | awk '{print $1}' || echo "")
 
+    local total=${#MODELS[@]}
+    local current=0
+
     for model in "${MODELS[@]}"; do
+        current=$((current + 1))
         if echo "$installed_models" | grep -q "^${model}"; then
-            success "Model already downloaded: ${model}"
+            ok "$model"
         else
-            info "Downloading ${model}... (this may take 10-15 min on first run)"
-            ollama pull "$model"
-            success "Model ready: ${model}"
+            spin_start "Downloading $model... (this may take 10-15 min)"
+            ollama pull "$model" &>/dev/null
+            spin_stop
+            ok "$model downloaded"
         fi
     done
 }
@@ -245,23 +303,24 @@ setup_models() {
 # Step 4: JCode
 # ══════════════════════════════════════════════════════════════════
 install_jcode() {
-    step "Setting up JCode"
+    section "JCode"
 
     # Clone or update
     if [[ -d "$JCODE_HOME" ]]; then
         if [[ -d "$JCODE_HOME/.git" ]]; then
-            info "Updating JCode..."
+            spin_start "Updating JCode..."
             cd "$JCODE_HOME"
-            git pull --ff-only 2>/dev/null || warn "Could not auto-update (local changes?). Continuing with existing version."
+            git pull --ff-only &>/dev/null 2>&1 || true
+            spin_stop
+            ok "Updated to latest"
         else
-            success "JCode directory already exists: $JCODE_HOME"
+            ok "JCode directory exists"
         fi
     else
-        info "Downloading JCode..."
+        spin_start "Downloading JCode..."
         if command_exists git; then
-            git clone "$JCODE_REPO" "$JCODE_HOME"
+            git clone "$JCODE_REPO" "$JCODE_HOME" &>/dev/null 2>&1
         else
-            # Fallback: download as zip
             local zip_url="${JCODE_REPO%.git}/archive/refs/heads/main.zip"
             local tmp_zip="/tmp/jcode_download.zip"
             curl -fsSL "$zip_url" -o "$tmp_zip"
@@ -269,40 +328,42 @@ install_jcode() {
             mv /tmp/jcode_extract/JcodeAgent-main "$JCODE_HOME"
             rm -rf "$tmp_zip" /tmp/jcode_extract
         fi
-        success "JCode downloaded to: $JCODE_HOME"
+        spin_stop
+        ok "Downloaded to $JCODE_HOME"
     fi
 
     cd "$JCODE_HOME"
 
-    # Create virtual environment
+    # Virtual environment
     if [[ ! -d "$JCODE_HOME/.venv" ]]; then
-        info "Creating Python virtual environment..."
+        spin_start "Creating Python virtual environment..."
         "$PYTHON_CMD" -m venv .venv
-        success "Virtual environment created"
+        spin_stop
+        ok "Virtual environment created"
     else
-        success "Virtual environment already exists"
+        ok "Virtual environment exists"
     fi
 
-    # Activate and install
+    # Install
     # shellcheck disable=SC1091
     source "$JCODE_HOME/.venv/bin/activate"
 
-    info "Installing JCode and dependencies..."
-    pip install --upgrade pip -q
-    pip install -e . -q
-    success "JCode installed"
+    spin_start "Installing dependencies..."
+    pip install --upgrade pip -q &>/dev/null
+    pip install -e . -q &>/dev/null
+    spin_stop
+    ok "JCode installed"
 }
 
 # ══════════════════════════════════════════════════════════════════
 # Step 5: Add to PATH
 # ══════════════════════════════════════════════════════════════════
 setup_path() {
-    step "Configuring PATH"
+    section "PATH"
 
     local venv_bin="$JCODE_HOME/.venv/bin"
     local shell_rc=""
 
-    # Determine shell config file
     case "$(basename "${SHELL:-/bin/bash}")" in
         zsh)  shell_rc="$HOME/.zshrc" ;;
         bash)
@@ -317,21 +378,18 @@ setup_path() {
     esac
 
     local path_line="export PATH=\"$venv_bin:\$PATH\""
-    local alias_line="alias jcode='$venv_bin/jcode'"
 
-    # Check if already added
     if [[ -f "$shell_rc" ]] && grep -qF "$venv_bin" "$shell_rc" 2>/dev/null; then
-        success "PATH already configured in $shell_rc"
+        ok "PATH configured in $shell_rc"
     else
         {
             echo ""
             echo "# JCode — Local AI Coding Agent"
             echo "$path_line"
         } >> "$shell_rc"
-        success "Added to PATH in $shell_rc"
+        ok "Added to PATH in $shell_rc"
     fi
 
-    # Also export for current session
     export PATH="$venv_bin:$PATH"
 }
 
@@ -339,34 +397,30 @@ setup_path() {
 # Summary
 # ══════════════════════════════════════════════════════════════════
 print_summary() {
-    echo ""
-    echo -e "${BOLD}${GREEN}"
-    cat << 'EOF'
-  ╔══════════════════════════════════════════╗
-  ║                                          ║
-  ║   JCode is ready!                        ║
-  ║                                          ║
-  ╚══════════════════════════════════════════╝
-EOF
-    echo -e "${NC}"
+    local py_ver
+    py_ver=$(${PYTHON_CMD} --version 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')
+    local ollama_ver
+    ollama_ver=$(ollama --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || echo 'installed')
 
-    echo -e "  ${BOLD}To start JCode:${NC}"
     echo ""
-    echo -e "    ${CYAN}jcode${NC}"
+    echo -e "  ${DIM}─────────────────────────────────────────────────${NC}"
     echo ""
-    echo -e "  ${DIM}If 'jcode' isn't found, open a new terminal first,${NC}"
-    echo -e "  ${DIM}or run:  source ~/.zshrc  (or ~/.bashrc)${NC}"
+    echo -e "  ${BOLD}${GREEN}Installation complete.${NC}"
     echo ""
-    echo -e "  ${BOLD}Quick start:${NC}"
+    echo -e "  ${DIM}Python${NC}    ${CYAN}${py_ver}${NC}"
+    echo -e "  ${DIM}Ollama${NC}    ${CYAN}${ollama_ver}${NC}"
+    echo -e "  ${DIM}Models${NC}    ${CYAN}${MODELS[*]}${NC}"
+    echo -e "  ${DIM}Location${NC}  ${CYAN}${JCODE_HOME}${NC}"
     echo ""
-    echo -e "    ${CYAN}jcode${NC}"
+    echo -e "  ${DIM}─────────────────────────────────────────────────${NC}"
+    echo ""
+    echo -e "  ${BOLD}Get started:${NC}"
+    echo ""
+    echo -e "    ${CYAN}\$ jcode${NC}"
     echo -e "    ${DIM}jcode>${NC} build a todo list web app"
     echo ""
-    echo -e "  ${BOLD}Installed:${NC}"
-    echo -e "    [+] Python    $(${PYTHON_CMD} --version 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')"
-    echo -e "    [+] Ollama    $(ollama --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || echo 'installed')"
-    echo -e "    [+] Models    ${MODELS[*]}"
-    echo -e "    [+] JCode     $JCODE_HOME"
+    echo -e "  ${DIM}If 'jcode' isn't found, open a new terminal or run:${NC}"
+    echo -e "  ${DIM}source ~/.zshrc  (or ~/.bashrc)${NC}"
     echo ""
 }
 
@@ -376,11 +430,10 @@ EOF
 main() {
     banner
 
-    local os
+    local os arch
     os=$(detect_os)
-    local arch
     arch=$(detect_arch)
-    info "Detected: ${BOLD}$os ($arch)${NC}"
+    info "System: $os ($arch)"
 
     install_python
     install_ollama

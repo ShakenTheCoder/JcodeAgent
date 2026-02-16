@@ -1,25 +1,23 @@
 """
-JCode CLI v5.0 — Two-level REPL with per-project context.
+JCode CLI v6.0 — Pure chat-driven project interaction.
 
 Level 1 (Home):
-  build <prompt>   — create a new project
-  projects         — list & select projects
+  build <prompt>   — create a new project from scratch
+  projects         — list & select a project to enter
   help / quit
 
 Level 2 (Project):
-  <natural language> — chat with agent about the project
-  run              — detect & run the project
-  modify <desc>    — request code changes
-  add <feature>    — add a new feature
-  docs <url>       — read documentation and inject into context
-  search <query>   — web search for info / docs
-  plan             — show current plan
-  files / tree     — list generated files
-  back             — return to home
+  Everything is natural language — the agent reads your intent:
+    - "fix the errors"       → modifies files
+    - "add dark mode"        → implements feature
+    - "how does routing work" → discusses without changing code
+    - "run"                  → detects & runs the project
+    - "back"                 → returns to home
 """
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
@@ -31,6 +29,7 @@ from pathlib import Path
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
+from rich.markdown import Markdown
 
 from prompt_toolkit import prompt as pt_prompt
 from prompt_toolkit.history import InMemoryHistory
@@ -75,22 +74,28 @@ HOME_HELP = """
 """
 
 PROJECT_HELP = """
-[bold white]Project Commands[/bold white]
+[bold white]Project Mode[/bold white]
 
-  [cyan]<message>[/cyan]          Chat with JCode about this project — ask questions,
-                     request changes, new features, ideas
-  [cyan]run[/cyan]                Detect and run the project
-  [cyan]modify[/cyan] <desc>      Request specific code changes
-  [cyan]add[/cyan] <feature>      Add a new feature to the project
-  [cyan]docs[/cyan] <url>         Read documentation and add to context
-  [cyan]search[/cyan] <query>     Search the web for info or documentation
-  [cyan]plan[/cyan]               Show current plan and task statuses
-  [cyan]files[/cyan]              List generated files
-  [cyan]tree[/cyan]               Show project directory tree
-  [cyan]rebuild[/cyan]            Re-run the full build pipeline
-  [cyan]save[/cyan]               Manually save session
-  [cyan]help[/cyan]               Show this help
-  [cyan]back[/cyan]               Return to home
+  Just type naturally — JCode understands your intent.
+
+  [cyan]Ask for changes:[/cyan]
+    "fix the login bug"
+    "add a dark mode toggle"
+    "refactor the API routes to use async/await"
+
+  [cyan]Ask questions:[/cyan]
+    "how does the authentication work?"
+    "what technologies are we using?"
+    "suggest improvements for performance"
+
+  [cyan]Utility:[/cyan]
+    [cyan]run[/cyan]          Detect and run the project
+    [cyan]plan[/cyan]         Show current build plan and task statuses
+    [cyan]files[/cyan]        List generated files
+    [cyan]tree[/cyan]         Show project directory tree
+    [cyan]rebuild[/cyan]      Re-run the full build pipeline
+    [cyan]clear[/cyan]        Clear the terminal
+    [cyan]back[/cyan]         Return to home
 """
 
 
@@ -340,7 +345,7 @@ def _home_repl(settings_mgr: SettingsManager, history: InMemoryHistory) -> None:
 
 
 # ═══════════════════════════════════════════════════════════════════
-# Level 2: Project REPL
+# Level 2: Project REPL — pure chat
 # ═══════════════════════════════════════════════════════════════════
 
 def _project_repl(
@@ -348,14 +353,14 @@ def _project_repl(
     output_dir: Path,
     settings_mgr: SettingsManager,
 ) -> None:
-    """Per-project REPL: chat, modify, run, add, docs, search, etc."""
+    """Per-project REPL: everything is chat unless it's a utility command."""
     proj_name = ctx.state.name or "project"
     history = InMemoryHistory()
 
     console.print(f"\n  [cyan]Entered project:[/cyan] [bold white]{proj_name}[/bold white]")
     console.print(f"  [dim]{output_dir}[/dim]")
     console.print(
-        "  Type [cyan]'help'[/cyan] for project commands, or just chat.\n"
+        "  Chat naturally — ask questions, request changes, or type [cyan]'help'[/cyan].\n"
     )
 
     while True:
@@ -371,43 +376,39 @@ def _project_repl(
         if not user_input:
             continue
 
-        parts = user_input.split(maxsplit=1)
-        cmd = parts[0].lower()
-        args = parts[1] if len(parts) > 1 else ""
+        cmd = user_input.lower().strip()
 
-        if cmd in ("back", "home", "exit", "quit"):
+        # Utility commands (exact match only)
+        if cmd in ("back", "home"):
             _auto_save(ctx, output_dir)
             console.print("  [dim]Returning to home.[/dim]\n")
             break
         elif cmd == "help":
             console.print(PROJECT_HELP, highlight=False)
+            continue
         elif cmd == "clear":
             console.clear()
+            continue
         elif cmd == "run":
             _cmd_run(ctx, output_dir)
+            continue
         elif cmd == "plan":
             _cmd_plan(ctx)
+            continue
         elif cmd == "files":
             _cmd_files(output_dir)
+            continue
         elif cmd == "tree":
             _cmd_tree(ctx, output_dir)
-        elif cmd == "save":
-            _cmd_save(ctx, output_dir)
+            continue
         elif cmd == "rebuild":
             _log("REBUILD", "Re-running build pipeline")
             execute_plan(ctx, output_dir)
             _auto_save(ctx, output_dir)
-        elif cmd == "modify" and args:
-            _cmd_chat(ctx, output_dir, f"Please modify the project: {args}")
-        elif cmd == "add" and args:
-            _cmd_chat(ctx, output_dir, f"Please add this feature to the project: {args}")
-        elif cmd == "docs" and args:
-            _cmd_docs(ctx, args)
-        elif cmd == "search" and args:
-            _cmd_search(ctx, args)
-        else:
-            # Everything else is treated as chat
-            _cmd_chat(ctx, output_dir, user_input)
+            continue
+
+        # Everything else → chat with the agent
+        _cmd_chat(ctx, output_dir, user_input)
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -528,8 +529,7 @@ def _cmd_select_project(
     session_file = output_dir / ".jcode_session.json"
 
     if not session_file.exists():
-        console.print(f"  [dim]No session data at {session_file}[/dim]")
-        # Create a minimal context from metadata
+        console.print(f"  [dim]No session data — loading from files on disk.[/dim]")
         state = ProjectState(
             name=proj.get("name", "project"),
             description=proj.get("prompt", ""),
@@ -538,11 +538,12 @@ def _cmd_select_project(
         )
         ctx = ContextManager(state)
         _scan_project_files(ctx, output_dir)
-        _log("LOADED", f"{proj.get('name', '?')} (from metadata)")
+        _log("LOADED", f"{proj.get('name', '?')} ({_count_project_files(output_dir)} files)")
         return ctx, output_dir
 
     ctx = ContextManager.load_session(session_file)
-    _log("LOADED", f"{proj.get('name', '?')}")
+    _scan_project_files(ctx, output_dir)
+    _log("LOADED", f"{proj.get('name', '?')} ({_count_project_files(output_dir)} files)")
     return ctx, output_dir
 
 
@@ -550,8 +551,12 @@ def _scan_project_files(ctx: ContextManager, output_dir: Path) -> None:
     """Scan project directory and load file contents into context."""
     if not output_dir.exists():
         return
+    skip_dirs = {".git", "node_modules", ".venv", "__pycache__", ".next", "dist", "build"}
     for f in output_dir.rglob("*"):
         if f.is_file() and not f.name.startswith("."):
+            # Skip files inside ignored directories
+            if any(part in skip_dirs for part in f.relative_to(output_dir).parts):
+                continue
             try:
                 rel = str(f.relative_to(output_dir))
                 content = f.read_text(errors="replace")
@@ -560,28 +565,44 @@ def _scan_project_files(ctx: ContextManager, output_dir: Path) -> None:
                 pass
 
 
+def _count_project_files(output_dir: Path) -> int:
+    """Count non-hidden files in project dir."""
+    if not output_dir.exists():
+        return 0
+    skip_dirs = {".git", "node_modules", ".venv", "__pycache__", ".next", "dist", "build"}
+    count = 0
+    for f in output_dir.rglob("*"):
+        if f.is_file() and not f.name.startswith("."):
+            if not any(part in skip_dirs for part in f.relative_to(output_dir).parts):
+                count += 1
+    return count
+
+
 # ═══════════════════════════════════════════════════════════════════
-# Chat / Modify / Add feature
+# Chat — the core of project interaction
 # ═══════════════════════════════════════════════════════════════════
 
 def _cmd_chat(ctx: ContextManager, output_dir: Path, user_message: str) -> None:
-    """Send a message to the agent within the project context."""
+    """
+    Send a message to the agent within the project context.
+    The agent decides whether to modify files or just discuss.
+    """
 
     # Refresh file contents from disk
     _scan_project_files(ctx, output_dir)
 
-    # Build file contents string (sliced)
+    # Build file contents string (all files, capped per file)
     file_parts = []
-    for path, content in list(ctx.state.files.items())[:20]:
-        trimmed = content[:4000]
+    for path, content in sorted(ctx.state.files.items()):
+        trimmed = content[:6000]
         file_parts.append(f"### {path}\n```\n{trimmed}\n```")
     file_contents = "\n\n".join(file_parts) if file_parts else "(no files yet)"
 
-    # Build chat history string (last 10 messages)
+    # Build chat history string (last 20 messages)
     chat_lines = []
-    for msg in ctx.chat_history[-10:]:
+    for msg in ctx.chat_history[-20:]:
         role = msg["role"].upper()
-        chat_lines.append(f"{role}: {msg['content'][:500]}")
+        chat_lines.append(f"{role}: {msg['content'][:800]}")
     chat_history_str = "\n".join(chat_lines) if chat_lines else "(start of conversation)"
 
     # Build the prompt
@@ -605,85 +626,122 @@ def _cmd_chat(ctx: ContextManager, output_dir: Path, user_message: str) -> None:
 
     response = call_model("coder", messages, stream=True)
 
-    # Check if response contains file modifications
-    if "===FILE:" in response:
-        file_blocks = re.findall(
-            r"===FILE:\s*(.+?)\s*===\s*\n(.*?)===END===",
-            response,
-            re.DOTALL,
-        )
-        if file_blocks:
-            _log("MODIFY", f"Updating {len(file_blocks)} file(s)")
-            for rel_path, content in file_blocks:
-                rel_path = rel_path.strip()
-                content = content.strip()
-                full_path = output_dir / rel_path
-                full_path.parent.mkdir(parents=True, exist_ok=True)
-                full_path.write_text(content)
-                ctx.record_file(rel_path, content)
-                console.print(f"           [dim]wrote[/dim] [white]{rel_path}[/white]")
+    # Apply any file modifications found in the response
+    files_written = _apply_file_changes(response, output_dir, ctx)
 
-            text_only = re.sub(
-                r"===FILE:.*?===END===", "", response, flags=re.DOTALL
-            ).strip()
-            if text_only:
-                console.print()
-                console.print(Panel(text_only, border_style="dim", padding=(1, 2)))
-        else:
-            console.print()
-            console.print(Panel(response, border_style="dim", padding=(1, 2)))
-    else:
+    # Display the text response (strip file blocks from display)
+    display_text = response
+    if files_written > 0:
+        # Remove file blocks from what we display
+        display_text = re.sub(
+            r"===FILE:.*?===END===", "", response, flags=re.DOTALL
+        ).strip()
+        _log("APPLIED", f"Updated {files_written} file(s)")
+
+    if display_text:
         console.print()
-        console.print(Panel(response, border_style="dim", padding=(1, 2)))
+        # Try to render as markdown for nicer formatting
+        try:
+            console.print(Panel(Markdown(display_text), border_style="dim", padding=(1, 2)))
+        except Exception:
+            console.print(Panel(display_text, border_style="dim", padding=(1, 2)))
 
     # Record assistant response
-    ctx.add_chat("assistant", response[:2000])
+    ctx.add_chat("assistant", response[:3000])
     _auto_save(ctx, output_dir)
     console.print()
 
 
+def _apply_file_changes(response: str, output_dir: Path, ctx: ContextManager) -> int:
+    """
+    Parse ===FILE: path=== ... ===END=== blocks from response and write files.
+    Also detect ```language\n...``` fenced code blocks that look like full files
+    when preceded by a filename reference.
+    Returns count of files written.
+    """
+    files_written = 0
+
+    # Method 1: Explicit ===FILE:=== markers (preferred)
+    file_blocks = re.findall(
+        r"===FILE:\s*(.+?)\s*===\s*\n(.*?)===END===",
+        response,
+        re.DOTALL,
+    )
+    for rel_path, content in file_blocks:
+        rel_path = rel_path.strip()
+        content = content.strip()
+        if rel_path and content:
+            full_path = output_dir / rel_path
+            full_path.parent.mkdir(parents=True, exist_ok=True)
+            full_path.write_text(content)
+            ctx.record_file(rel_path, content)
+            console.print(f"           [dim]wrote[/dim] [white]{rel_path}[/white]")
+            files_written += 1
+
+    return files_written
+
+
 # ═══════════════════════════════════════════════════════════════════
-# Run command
+# Run command — smart detection with dep install
 # ═══════════════════════════════════════════════════════════════════
 
 def _cmd_run(ctx: ContextManager, output_dir: Path) -> None:
-    """Auto-detect and run the project."""
+    """Auto-detect and run the project. Installs deps first if needed."""
     if not output_dir or not output_dir.exists():
         console.print("  [dim]No project directory.[/dim]")
         return
 
     _log("RUN", f"Detecting how to run {output_dir.name}")
 
-    # 1. Python: look for main.py, app.py, manage.py
+    # Install dependencies first if needed
+    _install_deps_if_needed(output_dir)
+
+    # 1. Python: look for main entry points (also in subdirs)
     for entry in ("main.py", "app.py", "manage.py", "server.py", "run.py"):
+        # Check root
         candidate = output_dir / entry
         if candidate.exists():
             _log("RUN", f"python3 {entry}")
             _run_subprocess(["python3", str(candidate)], cwd=output_dir)
             return
+        # Check common subdirs
+        for subdir in ("backend", "src", "server", "api"):
+            candidate = output_dir / subdir / entry
+            if candidate.exists():
+                _log("RUN", f"python3 {subdir}/{entry}")
+                _run_subprocess(["python3", str(candidate)], cwd=output_dir / subdir)
+                return
 
-    # 2. Node: package.json with start script
-    pkg_json = output_dir / "package.json"
-    if pkg_json.exists():
-        try:
-            import json
-            pkg = json.loads(pkg_json.read_text())
-            scripts = pkg.get("scripts", {})
-            if "start" in scripts:
-                _log("RUN", "npm start")
-                _run_subprocess(["npm", "start"], cwd=output_dir)
-                return
-            elif "dev" in scripts:
-                _log("RUN", "npm run dev")
-                _run_subprocess(["npm", "run", "dev"], cwd=output_dir)
-                return
-        except Exception:
-            pass
+    # 2. Node: package.json with start script (root or subdirs)
+    for search_dir in [output_dir] + [output_dir / d for d in ("backend", "server", "api", "frontend", "client")]:
+        pkg_json = search_dir / "package.json"
+        if pkg_json.exists():
+            try:
+                pkg = json.loads(pkg_json.read_text())
+                scripts = pkg.get("scripts", {})
+                if "start" in scripts:
+                    _log("RUN", f"npm start (in {search_dir.name})")
+                    _run_subprocess(["npm", "start"], cwd=search_dir)
+                    return
+                elif "dev" in scripts:
+                    _log("RUN", f"npm run dev (in {search_dir.name})")
+                    _run_subprocess(["npm", "run", "dev"], cwd=search_dir)
+                    return
+            except Exception:
+                pass
 
     # 3. HTML: look for index.html
     index_html = output_dir / "index.html"
+    if not index_html.exists():
+        # Check public/ or frontend/
+        for subdir in ("public", "frontend", "client", "dist"):
+            candidate = output_dir / subdir / "index.html"
+            if candidate.exists():
+                index_html = candidate
+                break
+
     if index_html.exists():
-        _log("RUN", f"Opening {index_html} in browser")
+        _log("RUN", f"Opening in browser: {index_html.name}")
         try:
             import webbrowser
             webbrowser.open(f"file://{index_html}")
@@ -701,7 +759,44 @@ def _cmd_run(ctx: ContextManager, output_dir: Path) -> None:
         return
 
     console.print("  [dim]Could not detect how to run this project.[/dim]")
-    console.print("  [dim]Try chatting with JCode to ask how to run it.[/dim]")
+    console.print("  [dim]Ask JCode: 'how do I run this project?'[/dim]")
+
+
+def _install_deps_if_needed(output_dir: Path) -> None:
+    """Install project dependencies if package manager files exist."""
+    # Node: package.json without node_modules
+    for search_dir in [output_dir] + [output_dir / d for d in ("backend", "server", "frontend", "client")]:
+        pkg_json = search_dir / "package.json"
+        node_modules = search_dir / "node_modules"
+        if pkg_json.exists() and not node_modules.exists():
+            _log("DEPS", f"Installing npm packages in {search_dir.name}/...")
+            try:
+                subprocess.run(
+                    ["npm", "install"],
+                    cwd=search_dir,
+                    capture_output=True,
+                    text=True,
+                    timeout=120,
+                )
+                _log("DEPS", "npm install complete")
+            except Exception as e:
+                console.print(f"  [dim]npm install failed: {e}[/dim]")
+
+    # Python: requirements.txt
+    req_txt = output_dir / "requirements.txt"
+    if req_txt.exists():
+        _log("DEPS", "Installing Python requirements...")
+        try:
+            subprocess.run(
+                ["python3", "-m", "pip", "install", "-r", str(req_txt), "-q"],
+                cwd=output_dir,
+                capture_output=True,
+                text=True,
+                timeout=120,
+            )
+            _log("DEPS", "pip install complete")
+        except Exception as e:
+            console.print(f"  [dim]pip install failed: {e}[/dim]")
 
 
 def _run_subprocess(cmd: list[str], cwd: Path) -> None:
@@ -731,55 +826,6 @@ def _run_subprocess(cmd: list[str], cwd: Path) -> None:
         console.print(f"  [dim]Command not found: {cmd[0]}[/dim]")
     except Exception as e:
         console.print(f"  [dim]Error: {e}[/dim]")
-
-
-# ═══════════════════════════════════════════════════════════════════
-# Docs & Search
-# ═══════════════════════════════════════════════════════════════════
-
-def _cmd_docs(ctx: ContextManager, url: str) -> None:
-    """Fetch documentation from a URL and inject into project context."""
-    _log("DOCS", f"Reading {url}")
-    content = fetch_page(url, max_chars=12000)
-
-    if content.startswith("["):
-        console.print(f"  [dim]{content}[/dim]")
-        return
-
-    doc_msg = f"[Documentation from {url}]\n\n{content[:8000]}"
-    ctx.add_chat("system", doc_msg)
-
-    console.print(f"  [dim]Loaded {len(content)} chars of documentation into context.[/dim]")
-    console.print(f"  [dim]The agent will use this in future responses.[/dim]\n")
-
-    preview = content[:500]
-    console.print(Panel(preview + "...", title=f"[dim]{url}[/dim]", border_style="dim"))
-
-
-def _cmd_search(ctx: ContextManager, query: str) -> None:
-    """Search the web and show results."""
-    _log("SEARCH", f"Searching: {query}")
-    results = web_search(query, max_results=5)
-
-    for i, r in enumerate(results, 1):
-        title = r.get("title", "")
-        url = r.get("url", "")
-        snippet = r.get("snippet", "")
-        console.print(f"  [cyan]{i}.[/cyan] [white]{title}[/white]")
-        if url:
-            console.print(f"     [dim]{url}[/dim]")
-        if snippet:
-            console.print(f"     {snippet[:120]}")
-        console.print()
-
-    if any(r.get("url") for r in results):
-        console.print("  [dim]Use 'docs <url>' to read any of these pages.[/dim]\n")
-
-    search_summary = f"[Web search for: {query}]\n"
-    for r in results:
-        if r.get("title"):
-            search_summary += f"- {r['title']}: {r.get('snippet', '')[:100]}\n"
-    ctx.add_chat("system", search_summary)
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -813,7 +859,13 @@ def _cmd_files(output_dir: Path | None) -> None:
         console.print("  [dim]No project directory yet.[/dim]")
         return
 
-    files = [f for f in output_dir.rglob("*") if f.is_file() and not f.name.startswith(".")]
+    skip_dirs = {".git", "node_modules", ".venv", "__pycache__", ".next", "dist", "build"}
+    files = []
+    for f in output_dir.rglob("*"):
+        if f.is_file() and not f.name.startswith("."):
+            if not any(part in skip_dirs for part in f.relative_to(output_dir).parts):
+                files.append(f)
+
     if not files:
         console.print("  [dim]No files generated yet.[/dim]")
         return
@@ -957,16 +1009,6 @@ def _cmd_uninstall(settings_mgr: SettingsManager) -> None:
 # ═══════════════════════════════════════════════════════════════════
 # Helpers
 # ═══════════════════════════════════════════════════════════════════
-
-def _cmd_save(ctx: ContextManager | None, output_dir: Path | None) -> None:
-    """Manually save the current session."""
-    if not ctx or not output_dir:
-        console.print("  [dim]Nothing to save.[/dim]")
-        return
-    session_file = output_dir / ".jcode_session.json"
-    ctx.save_session(session_file)
-    _log("SAVED", str(session_file))
-
 
 def _auto_save(ctx: ContextManager | None, output_dir: Path | None) -> None:
     """Auto-save session if applicable."""

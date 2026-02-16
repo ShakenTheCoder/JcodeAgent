@@ -3,7 +3,7 @@
 # One command. Installs everything.
 #
 # Usage:
-#   iwr -useb https://jcode.dev/install.ps1 | iex
+#   iwr -useb https://raw.githubusercontent.com/ShakenTheCoder/JcodeAgent/main/install.ps1 | iex
 #
 # What it does (only if not already installed):
 #   1. Installs Python 3.12+
@@ -24,22 +24,47 @@ $MODELS      = @("deepseek-r1:14b", "qwen2.5-coder:14b")
 $PYTHON_CMD  = ""
 
 # ── Helpers ────────────────────────────────────────────────────────
-function Write-Info    { param($msg) Write-Host "[i] $msg" -ForegroundColor Cyan }
-function Write-Success { param($msg) Write-Host "[+] $msg" -ForegroundColor Green }
-function Write-Warn    { param($msg) Write-Host "[!] $msg" -ForegroundColor Yellow }
-function Write-Fail    { param($msg) Write-Host "[x] $msg" -ForegroundColor Red; exit 1 }
-function Write-Step    { param($msg) Write-Host "`n== $msg ==" -ForegroundColor Cyan }
+function Write-Ok      { param($msg) Write-Host "  " -NoNewline; Write-Host "+" -ForegroundColor Green -NoNewline; Write-Host " $msg" }
+function Write-Info    { param($msg) Write-Host "  $msg" -ForegroundColor DarkGray }
+function Write-Warn    { param($msg) Write-Host "  " -NoNewline; Write-Host "!" -ForegroundColor Yellow -NoNewline; Write-Host " $msg" }
+function Write-Fail    { param($msg) Write-Host "  " -NoNewline; Write-Host "x" -ForegroundColor Red -NoNewline; Write-Host " $msg"; exit 1 }
+function Write-Section { param($msg) Write-Host ""; Write-Host "  $msg" -ForegroundColor Cyan; Write-Host "" }
 
 function Test-Command { param($cmd) return [bool](Get-Command $cmd -ErrorAction SilentlyContinue) }
+
+# ── Spinner simulation ────────────────────────────────────────────
+function Show-Spinner {
+    param($msg, [scriptblock]$action)
+    $frames = @("-", "\", "|", "/")
+    $job = Start-Job -ScriptBlock $action
+    $i = 0
+    while ($job.State -eq "Running") {
+        $f = $frames[$i % $frames.Count]
+        Write-Host "`r  $f $msg" -NoNewline -ForegroundColor DarkGray
+        Start-Sleep -Milliseconds 150
+        $i++
+    }
+    Write-Host "`r                                                          `r" -NoNewline
+    Receive-Job $job -ErrorAction SilentlyContinue | Out-Null
+    Remove-Job $job -ErrorAction SilentlyContinue | Out-Null
+}
 
 # ── Banner ─────────────────────────────────────────────────────────
 function Show-Banner {
     Write-Host ""
-    Write-Host "     ╦╔═╗╔═╗╔╦╗╔═╗" -ForegroundColor Cyan
-    Write-Host "     ║║  ║ ║ ║║║╣"   -ForegroundColor Cyan
-    Write-Host "    ╚╝╚═╝╚═╝═╩╝╚═╝  Installer" -ForegroundColor Cyan
+    $banner = @"
+     ##  ######  ######  ######  #######
+     ## ##    ## ##   ## ##   ## ##
+     ## ##       ##   ## ##   ## #####
+##   ## ##       ##   ## ##   ## ##
+ #####   ######   ######  ######  #######
+"@
+    Write-Host $banner -ForegroundColor Cyan
     Write-Host ""
-    Write-Host "    One command. Everything you need." -ForegroundColor White
+    Write-Host "  Your local, unlimited & private software engineer" -ForegroundColor DarkGray
+    Write-Host "  One command. Everything you need." -ForegroundColor DarkGray
+    Write-Host ""
+    Write-Host "  -------------------------------------------------" -ForegroundColor DarkGray
     Write-Host ""
 }
 
@@ -47,9 +72,8 @@ function Show-Banner {
 # Step 1: Python
 # ══════════════════════════════════════════════════════════════════
 function Install-Python {
-    Write-Step "Checking Python"
+    Write-Section "Python"
 
-    # Search for existing Python
     foreach ($cmd in @("python", "python3", "py")) {
         if (Test-Command $cmd) {
             try {
@@ -58,7 +82,7 @@ function Install-Python {
                     $ver = [version]$Matches[1]
                     if ($ver -ge $MIN_PYTHON) {
                         $script:PYTHON_CMD = $cmd
-                        Write-Success "Python $ver found ($cmd)"
+                        Write-Ok "Python $ver"
                         return
                     }
                 }
@@ -66,7 +90,6 @@ function Install-Python {
         }
     }
 
-    # Also check py launcher with version flag
     if (Test-Command "py") {
         try {
             $verOutput = & py -3 --version 2>&1
@@ -74,7 +97,7 @@ function Install-Python {
                 $ver = [version]$Matches[1]
                 if ($ver -ge $MIN_PYTHON) {
                     $script:PYTHON_CMD = "py -3"
-                    Write-Success "Python $ver found (py -3)"
+                    Write-Ok "Python $ver (py -3)"
                     return
                 }
             }
@@ -83,86 +106,84 @@ function Install-Python {
 
     Write-Warn "Python $MIN_PYTHON+ not found. Installing..."
 
-    # Try winget first (built into Windows 10/11)
     if (Test-Command "winget") {
-        Write-Info "Installing Python via winget..."
-        winget install Python.Python.3.12 --accept-package-agreements --accept-source-agreements --silent
+        Show-Spinner "Installing Python via winget..." {
+            winget install Python.Python.3.12 --accept-package-agreements --accept-source-agreements --silent 2>&1 | Out-Null
+        }
     } else {
-        # Download installer directly
-        Write-Info "Downloading Python installer..."
         $pyUrl = "https://www.python.org/ftp/python/3.12.8/python-3.12.8-amd64.exe"
         $pyInstaller = Join-Path $env:TEMP "python-installer.exe"
-        Invoke-WebRequest -Uri $pyUrl -OutFile $pyInstaller -UseBasicParsing
-
-        Write-Info "Running Python installer (this may take a minute)..."
-        Start-Process -FilePath $pyInstaller -ArgumentList "/quiet", "InstallAllUsers=0", "PrependPath=1", "Include_test=0" -Wait
+        Show-Spinner "Downloading Python..." {
+            Invoke-WebRequest -Uri $using:pyUrl -OutFile $using:pyInstaller -UseBasicParsing
+        }
+        Show-Spinner "Installing Python..." {
+            Start-Process -FilePath $using:pyInstaller -ArgumentList "/quiet", "InstallAllUsers=0", "PrependPath=1", "Include_test=0" -Wait
+        }
         Remove-Item $pyInstaller -ErrorAction SilentlyContinue
     }
 
-    # Refresh PATH
     $env:Path = [System.Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path", "User")
 
-    # Verify
     foreach ($cmd in @("python", "python3", "py")) {
         if (Test-Command $cmd) {
             try {
                 $verOutput = & $cmd --version 2>&1
                 if ($verOutput -match "(\d+\.\d+\.\d+)") {
                     $script:PYTHON_CMD = $cmd
-                    Write-Success "Python installed: $($Matches[1])"
+                    Write-Ok "Python installed: $($Matches[1])"
                     return
                 }
             } catch { }
         }
     }
 
-    Write-Fail "Python installation failed. Please install manually: https://www.python.org/downloads/"
+    Write-Fail "Python installation failed. Install manually: https://www.python.org/downloads/"
 }
 
 # ══════════════════════════════════════════════════════════════════
 # Step 2: Ollama
 # ══════════════════════════════════════════════════════════════════
 function Install-Ollama {
-    Write-Step "Checking Ollama"
+    Write-Section "Ollama"
 
     if (Test-Command "ollama") {
-        Write-Success "Ollama already installed"
+        Write-Ok "Ollama installed"
         return
     }
 
     Write-Warn "Ollama not found. Installing..."
 
     if (Test-Command "winget") {
-        Write-Info "Installing Ollama via winget..."
-        winget install Ollama.Ollama --accept-package-agreements --accept-source-agreements --silent
+        Show-Spinner "Installing Ollama via winget..." {
+            winget install Ollama.Ollama --accept-package-agreements --accept-source-agreements --silent 2>&1 | Out-Null
+        }
     } else {
-        Write-Info "Downloading Ollama installer..."
         $ollamaUrl = "https://ollama.ai/download/OllamaSetup.exe"
         $ollamaInstaller = Join-Path $env:TEMP "OllamaSetup.exe"
-        Invoke-WebRequest -Uri $ollamaUrl -OutFile $ollamaInstaller -UseBasicParsing
-
-        Write-Info "Running Ollama installer..."
-        Start-Process -FilePath $ollamaInstaller -ArgumentList "/SILENT" -Wait
+        Show-Spinner "Downloading Ollama..." {
+            Invoke-WebRequest -Uri $using:ollamaUrl -OutFile $using:ollamaInstaller -UseBasicParsing
+        }
+        Show-Spinner "Installing Ollama..." {
+            Start-Process -FilePath $using:ollamaInstaller -ArgumentList "/SILENT" -Wait
+        }
         Remove-Item $ollamaInstaller -ErrorAction SilentlyContinue
     }
 
-    # Refresh PATH
     $env:Path = [System.Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path", "User")
 
     if (-not (Test-Command "ollama")) {
         Write-Fail "Ollama installation failed. Install manually: https://ollama.ai/download"
     }
 
-    Write-Success "Ollama installed"
+    Write-Ok "Ollama installed"
 }
 
 # ══════════════════════════════════════════════════════════════════
 # Step 3: Start Ollama & pull models
 # ══════════════════════════════════════════════════════════════════
 function Setup-Models {
-    Write-Step "Checking AI models"
+    Write-Section "AI Models"
 
-    # Check if Ollama server is running
     $running = $false
     try {
         $response = Invoke-WebRequest -Uri "http://localhost:11434/api/tags" -UseBasicParsing -TimeoutSec 3 -ErrorAction SilentlyContinue
@@ -170,11 +191,11 @@ function Setup-Models {
     } catch { }
 
     if (-not $running) {
-        Write-Info "Starting Ollama server..."
-        Start-Process "ollama" -ArgumentList "serve" -WindowStyle Hidden
-        Start-Sleep -Seconds 5
+        Show-Spinner "Starting Ollama server..." {
+            Start-Process "ollama" -ArgumentList "serve" -WindowStyle Hidden
+            Start-Sleep -Seconds 5
+        }
 
-        # Wait for it
         $retries = 0
         while ($retries -lt 30) {
             try {
@@ -189,22 +210,22 @@ function Setup-Models {
             Write-Fail "Ollama failed to start. Try running 'ollama serve' manually."
         }
 
-        Write-Success "Ollama server started"
+        Write-Ok "Ollama server started"
     } else {
-        Write-Success "Ollama server already running"
+        Write-Ok "Ollama server running"
     }
 
-    # Get installed models
     $installed = ""
     try { $installed = & ollama list 2>&1 | Out-String } catch { }
 
     foreach ($model in $MODELS) {
         if ($installed -match [regex]::Escape($model)) {
-            Write-Success "Model already downloaded: $model"
+            Write-Ok "$model"
         } else {
-            Write-Info "Downloading $model... (this may take 10-15 min on first run)"
-            & ollama pull $model
-            Write-Success "Model ready: $model"
+            Show-Spinner "Downloading $model... (this may take 10-15 min)" {
+                & ollama pull $using:model 2>&1 | Out-Null
+            }
+            Write-Ok "$model downloaded"
         }
     }
 }
@@ -213,56 +234,59 @@ function Setup-Models {
 # Step 4: JCode
 # ══════════════════════════════════════════════════════════════════
 function Install-JCode {
-    Write-Step "Setting up JCode"
+    Write-Section "JCode"
 
     if (Test-Path $JCODE_HOME) {
         if (Test-Path (Join-Path $JCODE_HOME ".git")) {
-            Write-Info "Updating JCode..."
-            Push-Location $JCODE_HOME
-            try { & git pull --ff-only 2>&1 | Out-Null } catch {
-                Write-Warn "Could not auto-update. Continuing with existing version."
+            Show-Spinner "Updating JCode..." {
+                Push-Location $using:JCODE_HOME
+                try { & git pull --ff-only 2>&1 | Out-Null } catch { }
+                Pop-Location
             }
-            Pop-Location
+            Write-Ok "Updated to latest"
         } else {
-            Write-Success "JCode directory already exists: $JCODE_HOME"
+            Write-Ok "JCode directory exists"
         }
     } else {
-        Write-Info "Downloading JCode..."
         if (Test-Command "git") {
-            & git clone $JCODE_REPO $JCODE_HOME
+            Show-Spinner "Downloading JCode..." {
+                & git clone $using:JCODE_REPO $using:JCODE_HOME 2>&1 | Out-Null
+            }
         } else {
-            # Fallback: download as zip
             $zipUrl = $JCODE_REPO -replace "\.git$", "/archive/refs/heads/main.zip"
             $tmpZip = Join-Path $env:TEMP "jcode_download.zip"
-            Invoke-WebRequest -Uri $zipUrl -OutFile $tmpZip -UseBasicParsing
-            Expand-Archive -Path $tmpZip -DestinationPath $env:TEMP -Force
-            Move-Item (Join-Path $env:TEMP "JcodeAgent-main") $JCODE_HOME
-            Remove-Item $tmpZip -ErrorAction SilentlyContinue
+            Show-Spinner "Downloading JCode..." {
+                Invoke-WebRequest -Uri $using:zipUrl -OutFile $using:tmpZip -UseBasicParsing
+                Expand-Archive -Path $using:tmpZip -DestinationPath $env:TEMP -Force
+                Move-Item (Join-Path $env:TEMP "JcodeAgent-main") $using:JCODE_HOME
+                Remove-Item $using:tmpZip -ErrorAction SilentlyContinue
+            }
         }
-        Write-Success "JCode downloaded to: $JCODE_HOME"
+        Write-Ok "Downloaded to $JCODE_HOME"
     }
 
     Push-Location $JCODE_HOME
 
-    # Create virtual environment
     $venvPath = Join-Path $JCODE_HOME ".venv"
     if (-not (Test-Path $venvPath)) {
-        Write-Info "Creating Python virtual environment..."
-        if ($PYTHON_CMD -eq "py -3") {
-            & py -3 -m venv .venv
-        } else {
-            & $PYTHON_CMD -m venv .venv
+        Show-Spinner "Creating virtual environment..." {
+            if ($using:PYTHON_CMD -eq "py -3") {
+                & py -3 -m venv .venv
+            } else {
+                & $using:PYTHON_CMD -m venv .venv
+            }
         }
-        Write-Success "Virtual environment created"
+        Write-Ok "Virtual environment created"
     } else {
-        Write-Success "Virtual environment already exists"
+        Write-Ok "Virtual environment exists"
     }
 
-    # Activate and install
     $pipCmd = Join-Path $venvPath "Scripts" "pip.exe"
-    & $pipCmd install --upgrade pip -q 2>&1 | Out-Null
-    & $pipCmd install -e . -q
-    Write-Success "JCode installed"
+    Show-Spinner "Installing dependencies..." {
+        & $using:pipCmd install --upgrade pip -q 2>&1 | Out-Null
+        & $using:pipCmd install -e . -q 2>&1 | Out-Null
+    }
+    Write-Ok "JCode installed"
 
     Pop-Location
 }
@@ -271,17 +295,17 @@ function Install-JCode {
 # Step 5: Add to PATH
 # ══════════════════════════════════════════════════════════════════
 function Setup-Path {
-    Write-Step "Configuring PATH"
+    Write-Section "PATH"
 
     $venvBin = Join-Path $JCODE_HOME ".venv" "Scripts"
     $currentPath = [System.Environment]::GetEnvironmentVariable("Path", "User")
 
     if ($currentPath -like "*$venvBin*") {
-        Write-Success "PATH already configured"
+        Write-Ok "PATH configured"
     } else {
         [System.Environment]::SetEnvironmentVariable("Path", "$venvBin;$currentPath", "User")
         $env:Path = "$venvBin;$env:Path"
-        Write-Success "Added to PATH: $venvBin"
+        Write-Ok "Added to PATH"
     }
 }
 
@@ -289,25 +313,6 @@ function Setup-Path {
 # Summary
 # ══════════════════════════════════════════════════════════════════
 function Show-Summary {
-    Write-Host ""
-    Write-Host "  ╔══════════════════════════════════════════╗" -ForegroundColor Green
-    Write-Host "  ║                                          ║" -ForegroundColor Green
-    Write-Host "  ║   JCode is ready!                        ║" -ForegroundColor Green
-    Write-Host "  ║                                          ║" -ForegroundColor Green
-    Write-Host "  ╚══════════════════════════════════════════╝" -ForegroundColor Green
-    Write-Host ""
-    Write-Host "  To start JCode:" -ForegroundColor White
-    Write-Host ""
-    Write-Host "    jcode" -ForegroundColor Cyan
-    Write-Host ""
-    Write-Host "  If 'jcode' isn't found, open a new terminal first." -ForegroundColor DarkGray
-    Write-Host ""
-    Write-Host "  Quick start:" -ForegroundColor White
-    Write-Host ""
-    Write-Host "    jcode" -ForegroundColor Cyan
-    Write-Host "    jcode> build a todo list web app" -ForegroundColor DarkGray
-    Write-Host ""
-
     $pyVer = ""
     try {
         if ($PYTHON_CMD -eq "py -3") {
@@ -315,13 +320,27 @@ function Show-Summary {
         } else {
             $pyVer = & $PYTHON_CMD --version 2>&1
         }
+        if ($pyVer -match "(\d+\.\d+\.\d+)") { $pyVer = $Matches[1] }
     } catch { $pyVer = "installed" }
 
-    Write-Host "  Installed:" -ForegroundColor White
-    Write-Host "    [+] Python    $pyVer" -ForegroundColor Green
-    Write-Host "    [+] Ollama    installed" -ForegroundColor Green
-    Write-Host "    [+] Models    $($MODELS -join ', ')" -ForegroundColor Green
-    Write-Host "    [+] JCode     $JCODE_HOME" -ForegroundColor Green
+    Write-Host ""
+    Write-Host "  -------------------------------------------------" -ForegroundColor DarkGray
+    Write-Host ""
+    Write-Host "  Installation complete." -ForegroundColor Green
+    Write-Host ""
+    Write-Host "  Python    " -ForegroundColor DarkGray -NoNewline; Write-Host "$pyVer" -ForegroundColor Cyan
+    Write-Host "  Ollama    " -ForegroundColor DarkGray -NoNewline; Write-Host "installed" -ForegroundColor Cyan
+    Write-Host "  Models    " -ForegroundColor DarkGray -NoNewline; Write-Host "$($MODELS -join ', ')" -ForegroundColor Cyan
+    Write-Host "  Location  " -ForegroundColor DarkGray -NoNewline; Write-Host "$JCODE_HOME" -ForegroundColor Cyan
+    Write-Host ""
+    Write-Host "  -------------------------------------------------" -ForegroundColor DarkGray
+    Write-Host ""
+    Write-Host "  Get started:" -ForegroundColor White
+    Write-Host ""
+    Write-Host "    $ jcode" -ForegroundColor Cyan
+    Write-Host "    jcode> build a todo list web app" -ForegroundColor DarkGray
+    Write-Host ""
+    Write-Host "  If 'jcode' isn't found, open a new terminal." -ForegroundColor DarkGray
     Write-Host ""
 }
 
@@ -329,7 +348,7 @@ function Show-Summary {
 # Main
 # ══════════════════════════════════════════════════════════════════
 Show-Banner
-Write-Info "Detected: Windows $([System.Environment]::OSVersion.Version)"
+Write-Info "System: Windows $([System.Environment]::OSVersion.Version)"
 
 Install-Python
 Install-Ollama
