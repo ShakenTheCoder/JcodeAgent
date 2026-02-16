@@ -80,7 +80,7 @@ def review_file(file_path: str, ctx: ContextManager) -> dict:
     )
     ctx.add_message("reviewer", "user", prompt)
 
-    console.print(f"[bold blue]🔍 Reviewing [cyan]{file_path}[/cyan]…[/bold blue]")
+    console.print(f"  [dim]Reviewing[/dim] [cyan]{file_path}[/cyan]")
 
     _, coder_ctx = ctx.get_context_sizes()
     raw = call_reviewer(
@@ -93,15 +93,14 @@ def review_file(file_path: str, ctx: ContextManager) -> dict:
 
     # Display review summary
     if result.get("approved"):
-        console.print(f"   [green]✓ Approved[/green] — {result.get('summary', '')}")
+        console.print(f"    [cyan]approved[/cyan] — {result.get('summary', '')}")
     else:
         issues = result.get("issues", [])
         critical = [i for i in issues if i.get("severity") == "critical"]
         warnings = [i for i in issues if i.get("severity") == "warning"]
-        console.print(f"   [yellow]⚠ Issues found[/yellow] — {len(critical)} critical, {len(warnings)} warnings")
+        console.print(f"    [dim]issues found[/dim] — {len(critical)} critical, {len(warnings)} warnings")
         for issue in issues:
-            sev_color = "red" if issue.get("severity") == "critical" else "yellow"
-            console.print(f"     [{sev_color}]• {issue.get('description', '')}[/{sev_color}]")
+            console.print(f"      [dim]-[/dim] {issue.get('description', '')}")
 
     return result
 

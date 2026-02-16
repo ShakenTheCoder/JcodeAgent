@@ -99,17 +99,17 @@ class ContextManager:
         lines = []
         for t in self._task_dag:
             icon = {
-                TaskStatus.PENDING: "⬜",
-                TaskStatus.IN_PROGRESS: "🔄",
-                TaskStatus.GENERATED: "📝",
-                TaskStatus.REVIEWING: "🔍",
-                TaskStatus.NEEDS_FIX: "🔧",
-                TaskStatus.VERIFIED: "✅",
-                TaskStatus.FAILED: "❌",
-                TaskStatus.SKIPPED: "⏭️",
-            }.get(t.status, "❓")
+                TaskStatus.PENDING: "[ ]",
+                TaskStatus.IN_PROGRESS: "[~]",
+                TaskStatus.GENERATED: "[w]",
+                TaskStatus.REVIEWING: "[?]",
+                TaskStatus.NEEDS_FIX: "[!]",
+                TaskStatus.VERIFIED: "[x]",
+                TaskStatus.FAILED: "[-]",
+                TaskStatus.SKIPPED: "[>]",
+            }.get(t.status, "[.]")
             fails = f" (fails: {t.failure_count})" if t.failure_count else ""
-            lines.append(f"  {icon} Task {t.id}: {t.file} — {t.description}{fails}")
+            lines.append(f"  {icon} Task {t.id}: {t.file} -- {t.description}{fails}")
         return "\n".join(lines)
 
     # ── Structured Memory Accessors ────────────────────────────────

@@ -56,7 +56,7 @@ def create_plan(user_prompt: str, ctx: ContextManager) -> dict:
     ctx.add_planner_message("system", PLANNER_SYSTEM)
     ctx.add_planner_message("user", user_prompt)
 
-    console.print("\n[bold cyan]🧠 Planning your project…[/bold cyan]\n")
+    console.print("\n  [dim]Planning project architecture...[/dim]\n")
 
     raw = call_planner(ctx.get_planner_messages(), stream=True)
     ctx.add_planner_message("assistant", raw)
@@ -88,7 +88,7 @@ def refine_plan(ctx: ContextManager) -> dict:
     )
     ctx.add_planner_message("user", prompt)
 
-    console.print("\n[bold yellow]🔄 Revising plan based on errors…[/bold yellow]\n")
+    console.print("\n  [dim]Revising plan based on errors...[/dim]\n")
 
     planner_ctx, _ = ctx.get_context_sizes()
     raw = call_planner(ctx.get_planner_messages(), stream=True, num_ctx=planner_ctx)

@@ -32,7 +32,7 @@ def _ensure_model(model: str) -> None:
         progress.start()
         ollama.pull(model)
         progress.stop()
-        console.print(f"[green]✓ Model {model} ready.[/green]")
+        console.print(f"[green]Model {model} ready.[/green]")
         _verified_models.add(model)
 
 

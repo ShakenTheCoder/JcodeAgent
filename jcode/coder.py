@@ -54,7 +54,7 @@ def generate_file(task: dict, ctx: ContextManager) -> str:
     )
     ctx.add_coder_message("user", prompt)
 
-    console.print(f"\n[bold green]💻 Generating [cyan]{file_path}[/cyan]…[/bold green]\n")
+    console.print(f"\n  [dim]Generating[/dim] [cyan]{file_path}[/cyan]\n")
 
     _, coder_ctx = ctx.get_context_sizes()
     raw = call_coder(ctx.get_coder_messages(), stream=True, num_ctx=coder_ctx)
@@ -90,7 +90,7 @@ def patch_file(
     )
     ctx.add_coder_message("user", prompt)
 
-    console.print(f"\n[bold yellow]🔧 Patching [cyan]{file_path}[/cyan]…[/bold yellow]\n")
+    console.print(f"\n  [dim]Patching[/dim] [cyan]{file_path}[/cyan]\n")
 
     _, coder_ctx = ctx.get_context_sizes()
     raw = call_coder(ctx.get_coder_messages(), stream=True, num_ctx=coder_ctx)

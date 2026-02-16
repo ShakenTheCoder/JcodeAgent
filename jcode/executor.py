@@ -1,15 +1,16 @@
 """
-Verification pipeline — the quality gate that makes JCode reliable.
+Execution & verification pipeline — the quality gate that makes JCode reliable.
 
-Before any generated code is accepted:
-1. Syntax check (language-specific)
-2. Lint / format check
-3. Type check (if applicable)
-4. Import validation
-5. Test execution (if tests exist)
+Capabilities:
+  1. Run any shell command (with autonomy check)
+  2. Install any package (pip, npm, etc.)
+  3. Syntax check (language-specific)
+  4. Lint / format check
+  5. Type check (if applicable)
+  6. Import validation
+  7. Test execution (if tests exist)
 
 Only code that passes ALL gates is accepted.
-This is what turns a "smart model" into a "self-correcting engineer."
 """
 
 from __future__ import annotations
@@ -21,9 +22,26 @@ from pathlib import Path
 from dataclasses import dataclass
 
 from rich.console import Console
+from rich.prompt import Confirm
 
 console = Console()
 
+# ── Global autonomy flag (set by cli.py at startup) ───────────────
+_autonomous: bool = False
+
+
+def set_autonomous(value: bool) -> None:
+    """Set whether the agent may run commands without asking."""
+    global _autonomous
+    _autonomous = value
+
+
+def is_autonomous() -> bool:
+    """Check the current autonomy setting."""
+    return _autonomous
+
+
+# ── Data classes ───────────────────────────────────────────────────
 
 @dataclass
 class ExecResult:
@@ -61,6 +79,8 @@ class VerificationResult:
         return [c for c in self.checks if not c["passed"]]
 
 
+# ── Shell command execution ────────────────────────────────────────
+
 def run_command(
     command: str | list[str],
     cwd: Path | None = None,
@@ -89,6 +109,59 @@ def run_command(
         return ExecResult(cmd if isinstance(cmd, str) else " ".join(cmd), -1, "", f"Timed out after {timeout}s")
     except FileNotFoundError as e:
         return ExecResult(cmd if isinstance(cmd, str) else " ".join(cmd), -1, "", str(e))
+
+
+def shell_exec(
+    command: str,
+    cwd: Path | None = None,
+    timeout: int = 120,
+    reason: str = "",
+) -> ExecResult:
+    """Run an arbitrary shell command on behalf of the agent.
+    Checks the autonomy flag — if not autonomous, asks the user first."""
+    from datetime import datetime
+    ts = datetime.now().strftime("%H:%M:%S")
+
+    if not _autonomous:
+        console.print(f"\n  [dim]{ts}[/dim]  [cyan]EXEC[/cyan]      {command}")
+        if reason:
+            console.print(f"  [dim]Reason: {reason}[/dim]")
+        if not Confirm.ask("  Allow?", default=True):
+            return ExecResult(command, -1, "", "User declined")
+
+    console.print(f"  [dim]{ts}[/dim]  [cyan]EXEC[/cyan]      {command}")
+    result = run_command(command, cwd=cwd, timeout=timeout)
+    if not result.success and result.error_summary:
+        console.print(f"  [dim]  stderr: {result.error_summary[:200]}[/dim]")
+    return result
+
+
+def install_package(
+    package: str,
+    manager: str = "pip",
+    cwd: Path | None = None,
+) -> ExecResult:
+    """Install a package using pip, npm, or any other manager.
+    Checks the autonomy flag — if not autonomous, asks the user first."""
+    from datetime import datetime
+    ts = datetime.now().strftime("%H:%M:%S")
+
+    if manager == "pip":
+        cmd = f"pip install {package}"
+    elif manager == "npm":
+        cmd = f"npm install {package}"
+    elif manager == "pip3":
+        cmd = f"pip3 install {package}"
+    else:
+        cmd = f"{manager} install {package}"
+
+    if not _autonomous:
+        console.print(f"\n  [dim]{ts}[/dim]  [cyan]INSTALL[/cyan]   {cmd}")
+        if not Confirm.ask("  Allow?", default=True):
+            return ExecResult(cmd, -1, "", "User declined")
+
+    console.print(f"  [dim]{ts}[/dim]  [cyan]INSTALL[/cyan]   {cmd}")
+    return run_command(cmd, cwd=cwd, timeout=120)
 
 
 # ── Verification pipeline ──────────────────────────────────────────
@@ -120,7 +193,7 @@ def verify_file(file_path: Path, project_dir: Path) -> VerificationResult:
 
 
 def _verify_python(file_path: Path, project_dir: Path) -> list[dict]:
-    """Python verification: syntax → imports → type check."""
+    """Python verification: syntax > imports > type check."""
     checks = []
 
     # 1. Syntax check
@@ -131,7 +204,6 @@ def _verify_python(file_path: Path, project_dir: Path) -> list[dict]:
         "output": result.error_summary if not result.success else "OK",
     })
 
-    # If syntax fails, skip other checks
     if not result.success:
         return checks
 
@@ -186,28 +258,32 @@ def _verify_json(file_path: Path) -> list[dict]:
 
 # ── Dependency installation ────────────────────────────────────────
 
-def install_dependencies(project_dir: Path, tech_stack: list[str]) -> list[ExecResult]:
-    """Install project dependencies."""
+def install_dependencies(project_dir: Path, tech_stack: list[str] | None = None) -> list[ExecResult]:
+    """Auto-install project dependencies (requirements.txt / package.json)."""
     results: list[ExecResult] = []
+    from datetime import datetime
 
     req_file = project_dir / "requirements.txt"
     if req_file.exists():
-        console.print("[cyan]📦 Installing Python dependencies…[/cyan]")
-        results.append(run_command(f"pip install -r {req_file}", cwd=project_dir, timeout=120))
+        results.append(
+            install_package(f"-r {req_file}", manager="pip", cwd=project_dir)
+        )
 
     pkg_file = project_dir / "package.json"
     if pkg_file.exists() and shutil.which("npm"):
-        console.print("[cyan]📦 Installing Node.js dependencies…[/cyan]")
-        results.append(run_command("npm install", cwd=project_dir, timeout=120))
+        results.append(
+            shell_exec("npm install", cwd=project_dir, reason="Install Node.js dependencies")
+        )
 
     return results
 
 
 # ── Test execution ─────────────────────────────────────────────────
 
-def run_tests(project_dir: Path, tech_stack: list[str]) -> ExecResult:
+def run_tests(project_dir: Path, tech_stack: list[str] | None = None) -> ExecResult:
     """Run the project test suite."""
-    if any("python" in t.lower() for t in tech_stack):
+    tech = tech_stack or []
+    if any("python" in t.lower() for t in tech):
         if shutil.which("pytest"):
             return run_command("pytest --tb=short -q", cwd=project_dir, timeout=60)
         return run_command("python3 -m pytest --tb=short -q", cwd=project_dir, timeout=60)

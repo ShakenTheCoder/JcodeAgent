@@ -1,19 +1,21 @@
 """
-JCode CLI v3.0 — Minimal, clean terminal interface.
+JCode CLI v4.0 — Clean, autonomous terminal interface.
 
 Colors: cyan + white only. No emojis. No clutter.
 
 Launch flow:
-  1. First-run setup wizard (if needed)
-  2. Check Ollama connection
-  3. Interactive launcher: new project / continue existing
-  4. Build pipeline: plan > generate > review > verify > fix
-  5. REPL for inspection / additional commands
+  1. Banner + greeting + hint
+  2. First-run setup (auto, no customization prompts)
+  3. Autonomy approval (install packages / run commands)
+  4. Check Ollama
+  5. REPL:  build <prompt>  |  continue  |  help  |  uninstall
 """
 
 from __future__ import annotations
 
 import os
+import re
+import shutil
 import subprocess
 import sys
 from datetime import datetime
@@ -23,7 +25,6 @@ from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.table import Table
-from rich.prompt import Confirm
 
 from prompt_toolkit import prompt as pt_prompt
 from prompt_toolkit.history import InMemoryHistory
@@ -36,11 +37,12 @@ from jcode.iteration import execute_plan
 from jcode.file_manager import print_tree
 from jcode.ollama_client import check_ollama_running
 from jcode.settings import SettingsManager
+from jcode.executor import set_autonomous
 
 console = Console()
 
 # ═══════════════════════════════════════════════════════════════════
-# ASCII Art — blocky pixel style
+# ASCII Art
 # ═══════════════════════════════════════════════════════════════════
 
 BANNER = r"""
@@ -51,28 +53,180 @@ BANNER = r"""
 ╚█████╔╝╚██████╗╚██████╔╝██████╔╝███████╗
  ╚════╝  ╚═════╝ ╚═════╝ ╚═════╝ ╚══════╝"""
 
-TAG_LINE = "your local, unlimited & private software engineer"
+GREETING = "Welcome back." if Path("~/.jcode/settings.json").expanduser().exists() else "Welcome."
 
 HELP_TEXT = """
-**Available commands:**
+[bold white]Commands[/bold white]
 
-| Command | Description |
-|---------|-------------|
-| `build <prompt>` | Full pipeline: plan > generate > review > verify |
-| `plan` | Show current plan |
-| `files` | List generated files |
-| `tree` | Show project directory tree |
-| `projects` | List all saved projects |
-| `resume` | Resume the last project |
-| `update` | Update JCode to latest version |
-| `save` | Manually save current session |
-| `load <path>` | Load a session file |
-| `settings` | View/edit settings |
-| `clear` | Clear screen |
-| `help` | Show this help |
-| `quit` / `exit` | Exit JCode |
+  [cyan]build[/cyan] <prompt>     Plan, generate, review, verify, fix — fully automated
+  [cyan]continue[/cyan]           Resume the last project or pick from saved ones
+  [cyan]projects[/cyan]           List all saved projects
+  [cyan]plan[/cyan]               Show current plan and task statuses
+  [cyan]files[/cyan]              List generated files
+  [cyan]tree[/cyan]               Show project directory tree
+  [cyan]update[/cyan]             Update JCode to latest version
+  [cyan]uninstall[/cyan]          Remove JCode — projects are saved to Desktop
+  [cyan]clear[/cyan]              Clear the terminal
+  [cyan]help[/cyan]               Show this help
+  [cyan]quit[/cyan]               Exit
 """
 
+
+# ═══════════════════════════════════════════════════════════════════
+# Selection widget — space to toggle, enter to confirm
+# ═══════════════════════════════════════════════════════════════════
+
+def _select_one(title: str, options: list[str]) -> int | None:
+    """Interactive single-select: arrow keys to move, enter to confirm.
+    Returns the 0-based index or None if cancelled.
+    Falls back to numbered input when terminal does not support raw mode.
+    """
+    try:
+        import tty, termios
+        fd = sys.stdin.fileno()
+        old = termios.tcgetattr(fd)
+    except Exception:
+        # Fallback: simple numbered selection
+        return _select_one_fallback(title, options)
+
+    selected = 0
+
+    def _render():
+        # Move cursor up len(options)+1 lines and re-draw
+        for _ in range(len(options) + 1):
+            sys.stdout.write("\033[A\033[2K")
+        sys.stdout.write(f"  {title}\n")
+        for i, opt in enumerate(options):
+            marker = "[cyan]>[/cyan] " if i == selected else "  "
+            style = "bold white" if i == selected else "dim"
+            console.print(f"    {marker}[{style}]{opt}[/{style}]", highlight=False)
+        sys.stdout.flush()
+
+    # Initial draw
+    console.print(f"  {title}")
+    for i, opt in enumerate(options):
+        marker = "[cyan]>[/cyan] " if i == selected else "  "
+        style = "bold white" if i == selected else "dim"
+        console.print(f"    {marker}[{style}]{opt}[/{style}]", highlight=False)
+
+    try:
+        tty.setraw(fd)
+        while True:
+            ch = sys.stdin.read(1)
+            if ch == "\r" or ch == "\n":
+                break
+            if ch == "\x03":  # Ctrl-C
+                selected = None
+                break
+            if ch == "\x1b":
+                seq = sys.stdin.read(2)
+                if seq == "[A":  # Up
+                    selected = (selected - 1) % len(options)
+                elif seq == "[B":  # Down
+                    selected = (selected + 1) % len(options)
+            _render()
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old)
+
+    console.print()
+    return selected
+
+
+def _select_one_fallback(title: str, options: list[str]) -> int | None:
+    """Simple numbered fallback for non-TTY environments."""
+    console.print(f"\n  {title}\n")
+    for i, opt in enumerate(options, 1):
+        console.print(f"    [cyan]{i}[/cyan]  {opt}")
+    console.print()
+    pick = pt_prompt("  > ").strip()
+    try:
+        idx = int(pick) - 1
+        if 0 <= idx < len(options):
+            return idx
+    except ValueError:
+        pass
+    return 0
+
+
+def _select_multi(title: str, options: list[str], defaults: list[bool] | None = None) -> list[int]:
+    """Interactive multi-select: space to toggle, enter to confirm.
+    Returns list of 0-based selected indices.
+    Falls back to numbered input when terminal does not support raw mode.
+    """
+    toggled = list(defaults) if defaults else [False] * len(options)
+    try:
+        import tty, termios
+        fd = sys.stdin.fileno()
+        old = termios.tcgetattr(fd)
+    except Exception:
+        return _select_multi_fallback(title, options, toggled)
+
+    cursor = 0
+
+    def _render():
+        for _ in range(len(options) + 2):
+            sys.stdout.write("\033[A\033[2K")
+        sys.stdout.write(f"  {title}\n")
+        for i, opt in enumerate(options):
+            ptr = "[cyan]>[/cyan]" if i == cursor else " "
+            box = "[cyan][x][/cyan]" if toggled[i] else "[dim][ ][/dim]"
+            style = "bold white" if i == cursor else "dim"
+            console.print(f"   {ptr} {box} [{style}]{opt}[/{style}]", highlight=False)
+        console.print("  [dim]space = toggle  |  enter = confirm[/dim]", highlight=False)
+
+    console.print(f"  {title}")
+    for i, opt in enumerate(options):
+        ptr = "[cyan]>[/cyan]" if i == cursor else " "
+        box = "[cyan][x][/cyan]" if toggled[i] else "[dim][ ][/dim]"
+        style = "bold white" if i == cursor else "dim"
+        console.print(f"   {ptr} {box} [{style}]{opt}[/{style}]", highlight=False)
+    console.print("  [dim]space = toggle  |  enter = confirm[/dim]", highlight=False)
+
+    try:
+        tty.setraw(fd)
+        while True:
+            ch = sys.stdin.read(1)
+            if ch == "\r" or ch == "\n":
+                break
+            if ch == "\x03":
+                return []
+            if ch == " ":
+                toggled[cursor] = not toggled[cursor]
+            if ch == "\x1b":
+                seq = sys.stdin.read(2)
+                if seq == "[A":
+                    cursor = (cursor - 1) % len(options)
+                elif seq == "[B":
+                    cursor = (cursor + 1) % len(options)
+            _render()
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old)
+
+    console.print()
+    return [i for i, t in enumerate(toggled) if t]
+
+
+def _select_multi_fallback(title: str, options: list[str], toggled: list[bool]) -> list[int]:
+    """Fallback multi-select."""
+    console.print(f"\n  {title}")
+    for i, opt in enumerate(options, 1):
+        tag = "[cyan]x[/cyan]" if toggled[i - 1] else " "
+        console.print(f"    [{tag}] [cyan]{i}[/cyan]  {opt}")
+    console.print()
+    raw = pt_prompt("  Toggle (e.g. 1 3): ").strip()
+    for tok in raw.split():
+        try:
+            idx = int(tok) - 1
+            if 0 <= idx < len(options):
+                toggled[idx] = not toggled[idx]
+        except ValueError:
+            pass
+    return [i for i, t in enumerate(toggled) if t]
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Main entry point
+# ═══════════════════════════════════════════════════════════════════
 
 def main():
     """Entry point for the JCode CLI."""
@@ -81,39 +235,42 @@ def main():
     output_dir: Path | None = None
     history = InMemoryHistory()
 
-    # -- First-run setup wizard
+    # -- First-run: auto-create projects dir, no questions
     if settings_mgr.is_first_run():
-        _setup_wizard(settings_mgr)
+        _first_run_setup(settings_mgr)
 
     # -- Banner
     console.print(BANNER, style="bold cyan", highlight=False)
     console.print(
-        f"  v{__version__}  |  {TAG_LINE}",
+        f"  v{__version__}  |  your local, unlimited & private software engineer",
         style="dim white",
     )
     console.print()
 
     # -- Check Ollama
     if not check_ollama_running():
-        console.print("  [bold red]Ollama is not running.[/bold red]")
-        console.print("  [dim]Start it with:[/dim]  ollama serve", style="white")
+        console.print("  [dim]Ollama is not running.[/dim]")
+        console.print("  [dim]Start it with:[/dim]  [cyan]ollama serve[/cyan]")
         console.print(
-            "  [dim]Then pull models:[/dim]  ollama pull deepseek-r1:14b && ollama pull qwen2.5-coder:14b",
-            style="white",
+            "  [dim]Then pull models:[/dim]  [cyan]ollama pull deepseek-r1:14b && ollama pull qwen2.5-coder:14b[/cyan]",
         )
         sys.exit(1)
+    console.print(f"  [cyan]Ollama connected[/cyan]")
 
-    console.print("  [cyan]Ollama connected[/cyan]")
+    # -- Greeting + default save dir
+    projects_dir = settings_mgr.get_default_output_dir()
+    console.print(f"  [dim]Projects directory:[/dim] [cyan]{projects_dir}[/cyan]")
     console.print()
 
-    # -- Interactive Launcher
-    result = _interactive_launcher(settings_mgr)
-    if result:
-        ctx, output_dir = result
+    # -- Autonomy approval
+    _autonomy_check(settings_mgr)
+
+    # -- Hint
+    console.print(
+        "  Type [cyan]'help'[/cyan] for commands, [cyan]'build <prompt>'[/cyan] to start.\n"
+    )
 
     # -- Main REPL
-    console.print("[dim]Type 'help' for commands, 'build <prompt>' to start.[/dim]\n")
-
     while True:
         try:
             user_input = pt_prompt("jcode> ", history=history).strip()
@@ -134,14 +291,20 @@ def main():
             console.print("[dim]Goodbye.[/dim]")
             break
         elif cmd == "help":
-            console.print(Markdown(HELP_TEXT))
+            console.print(HELP_TEXT, highlight=False)
         elif cmd == "clear":
             console.clear()
         elif cmd == "build":
             if not args:
-                console.print("[dim]Usage: build <describe what you want>[/dim]")
+                console.print("  [dim]Usage:[/dim] [cyan]build <describe what you want>[/cyan]")
                 continue
-            ctx, output_dir = _cmd_build(args, settings_mgr)
+            result = _cmd_build(args, settings_mgr)
+            if result:
+                ctx, output_dir = result
+        elif cmd == "continue":
+            result = _cmd_continue(settings_mgr)
+            if result:
+                ctx, output_dir = result
         elif cmd == "plan":
             _cmd_plan(ctx)
         elif cmd == "files":
@@ -150,155 +313,54 @@ def main():
             _cmd_tree(ctx, output_dir)
         elif cmd == "projects":
             _cmd_projects(settings_mgr)
-        elif cmd == "resume":
-            ctx, output_dir = _cmd_resume(settings_mgr)
         elif cmd == "update":
             _cmd_update()
+        elif cmd == "uninstall":
+            _cmd_uninstall(settings_mgr)
         elif cmd == "save":
             _cmd_save(ctx, output_dir)
-        elif cmd == "load":
-            ctx, output_dir = _cmd_load(args)
-        elif cmd == "settings":
-            _cmd_settings(settings_mgr)
         else:
-            console.print(f"[dim]Unknown command: {cmd}. Type 'help'.[/dim]")
+            # Treat anything else as an implicit build prompt
+            result = _cmd_build(user_input, settings_mgr)
+            if result:
+                ctx, output_dir = result
 
 
 # ═══════════════════════════════════════════════════════════════════
-# Interactive Launcher
+# First-run & autonomy
 # ═══════════════════════════════════════════════════════════════════
 
-def _interactive_launcher(
-    settings_mgr: SettingsManager,
-) -> tuple[ContextManager, Path] | None:
-    """
-    Startup launcher.  Two choices:
-      1  New project   — blank or clone from GitHub
-      2  Continue      — pick from saved projects
-    """
-    projects = settings_mgr.list_projects()
-    has_projects = bool(projects)
-
-    console.print("  [bold white]What would you like to do?[/bold white]\n")
-
-    console.print("    [cyan]1[/cyan]  New project", style="white")
-    if has_projects:
-        console.print("    [cyan]2[/cyan]  Continue an existing project", style="white")
-    console.print()
-
-    choice = pt_prompt("  > ").strip()
-
-    if choice == "1":
-        return _launcher_new_project(settings_mgr)
-    elif choice == "2" and has_projects:
-        return _launcher_continue_project(settings_mgr, projects)
-    elif choice == "2" and not has_projects:
-        console.print("[dim]  No projects yet. Starting a new one.[/dim]\n")
-        return _launcher_new_project(settings_mgr)
-    else:
-        return _launcher_new_project(settings_mgr)
+def _first_run_setup(settings_mgr: SettingsManager) -> None:
+    """Silent first-run: create default projects dir, no prompts."""
+    default_dir = Path("~/jcode_projects").expanduser().resolve()
+    default_dir.mkdir(parents=True, exist_ok=True)
+    settings_mgr.set_default_output_dir(str(default_dir))
 
 
-def _launcher_new_project(
-    settings_mgr: SettingsManager,
-) -> tuple[ContextManager, Path] | None:
-    """New project flow — describe it, optionally clone, pick directory."""
-    console.print()
-
-    # -- Show and confirm output directory
-    default_dir = settings_mgr.get_default_output_dir()
-    console.print(f"  [dim]Save location:[/dim] [cyan]{default_dir}[/cyan]")
-
-    change = pt_prompt("  Change? (enter new path or press Enter to keep): ").strip()
-    if change:
-        default_dir = Path(change).expanduser().resolve()
-        settings_mgr.set_default_output_dir(str(default_dir))
-        console.print(f"  [cyan]Updated to: {default_dir}[/cyan]")
-
-    console.print()
-
-    # -- Project type
-    console.print("  [bold white]How do you want to start?[/bold white]\n")
-    console.print("    [cyan]1[/cyan]  Blank project — describe what to build", style="white")
-    console.print("    [cyan]2[/cyan]  Clone from GitHub — start from an existing repo", style="white")
-    console.print()
-
-    start_choice = pt_prompt("  > ").strip()
-
-    clone_url = None
-    if start_choice == "2":
-        console.print()
-        clone_url = pt_prompt("  GitHub URL: ").strip()
-        if not clone_url:
-            console.print("  [dim]No URL entered. Starting blank.[/dim]")
-            clone_url = None
-
-    # -- Prompt
-    console.print()
-    prompt = pt_prompt("  Describe what you want to build:\n  > ").strip()
-    if not prompt:
-        console.print("  [dim]No description. Returning to prompt.[/dim]")
-        return None
-
-    return _cmd_build(prompt, settings_mgr, clone_url=clone_url)
-
-
-def _launcher_continue_project(
-    settings_mgr: SettingsManager, projects: list[dict],
-) -> tuple[ContextManager, Path] | None:
-    """Pick a project from the saved list and resume it."""
-    console.print()
-
-    table = Table(
-        show_header=True,
-        header_style="bold cyan",
-        border_style="dim",
-        show_lines=False,
-        padding=(0, 1),
+def _autonomy_check(settings_mgr: SettingsManager) -> None:
+    """Ask the user once per session whether JCode may install packages
+    and run terminal commands autonomously.  Stores the answer on the
+    settings object (not persisted to disk — per-session only)."""
+    console.print(
+        "  [bold white]JCode needs permission to install packages and run[/bold white]"
     )
-    table.add_column("#", width=4, style="cyan", justify="right")
-    table.add_column("Project", style="bold white")
-    table.add_column("Status", justify="center")
-    table.add_column("Last Modified", style="dim")
-
-    for i, p in enumerate(projects, 1):
-        status = "[cyan]done[/cyan]" if p.get("completed") else "[dim]in progress[/dim]"
-        table.add_row(
-            str(i),
-            p.get("name", "?"),
-            status,
-            p.get("last_modified", "?")[:16],
-        )
-
-    console.print(table)
+    console.print(
+        "  [bold white]terminal commands on your behalf for full autonomy.[/bold white]"
+    )
     console.print()
 
-    pick = pt_prompt(f"  Select [1-{len(projects)}]: ").strip()
-    try:
-        idx = int(pick) - 1
-        proj = projects[idx]
-    except (ValueError, IndexError):
-        console.print("  [dim]Invalid selection.[/dim]")
-        return None
+    choice = _select_one("Grant autonomous access?", [
+        "Yes — install packages and run commands automatically",
+        "No  — ask me before each action",
+    ])
 
-    output_dir = Path(proj.get("output_dir", ""))
-    session_file = output_dir / ".jcode_session.json"
+    settings_mgr._autonomous = (choice == 0)
+    set_autonomous(choice == 0)
 
-    if not session_file.exists():
-        console.print(f"  [dim]No session file at {session_file}[/dim]")
-        console.print("  [dim]Project exists but has no resumable session.[/dim]")
-        return None
-
-    ctx = ContextManager.load_session(session_file)
-    console.print(f"\n  [cyan]Loaded: {proj.get('name', '?')}[/cyan]")
-    console.print(f"  [dim]{output_dir}[/dim]")
-
-    if not proj.get("completed", False):
-        console.print()
-        if Confirm.ask("  Resume building where you left off?", default=True):
-            execute_plan(ctx, output_dir)
-
-    return ctx, output_dir
+    if settings_mgr._autonomous:
+        console.print("  [cyan]Autonomous mode enabled for this session.[/cyan]\n")
+    else:
+        console.print("  [dim]Confirmation mode — you'll be asked before each action.[/dim]\n")
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -308,28 +370,17 @@ def _launcher_continue_project(
 def _cmd_build(
     prompt: str,
     settings_mgr: SettingsManager,
-    clone_url: str | None = None,
-) -> tuple[ContextManager, Path]:
-    """Full pipeline: plan > generate > review > verify."""
+) -> tuple[ContextManager, Path] | None:
+    """Full autonomous pipeline: plan > generate > review > verify > fix."""
 
     # -- Output directory
     default_dir = settings_mgr.get_default_output_dir()
     slug = _slugify(prompt[:40])
     output_dir = default_dir / slug
+    output_dir.mkdir(parents=True, exist_ok=True)
 
-    console.print(f"\n  [dim]Output:[/dim] [cyan]{output_dir}[/cyan]")
-
-    # -- Clone if requested
-    if clone_url:
-        console.print(f"  [dim]Cloning {clone_url}...[/dim]")
-        try:
-            subprocess.run(
-                ["git", "clone", clone_url, str(output_dir)],
-                check=True, capture_output=True, text=True,
-            )
-            console.print("  [cyan]Repository cloned[/cyan]")
-        except (FileNotFoundError, subprocess.CalledProcessError) as e:
-            console.print(f"  [dim]Clone failed, continuing blank: {e}[/dim]")
+    console.print(f"\n  [dim]Project:[/dim] [cyan]{slug}[/cyan]")
+    console.print(f"  [dim]Output:[/dim]  [cyan]{output_dir}[/cyan]")
 
     # -- Detect complexity
     complexity = detect_complexity(prompt)
@@ -346,34 +397,20 @@ def _cmd_build(
 
     # -- Phase 1: Planning
     console.print()
-    console.print(
-        Panel(
-            "[bold white]Phase 1  PLANNING[/bold white]",
-            border_style="cyan",
-            expand=False,
-            padding=(0, 2),
-        )
-    )
+    _log("PHASE 1", "Planning project architecture")
     plan = create_plan(prompt, ctx)
     ctx.set_plan(plan)
 
     task_count = len(plan.get("tasks", []))
-    console.print(f"  [cyan]Plan created: {task_count} task(s)[/cyan]")
+    _log("PLAN", f"{task_count} task(s) created")
 
     for t in plan.get("tasks", []):
-        deps = f"  [dim](deps: {t.get('depends_on', [])})[/dim]" if t.get("depends_on") else ""
-        console.print(f"    {t.get('id', '?')}. [white]{t.get('file', '')}[/white]{deps}")
+        deps = f" [dim](after {t.get('depends_on', [])})[/dim]" if t.get("depends_on") else ""
+        console.print(f"          {t.get('id', '?')}. [white]{t.get('file', '')}[/white]{deps}")
 
-    # -- Phase 2: Building
+    # -- Phase 2: Building (fully automatic)
     console.print()
-    console.print(
-        Panel(
-            "[bold white]Phase 2  BUILDING[/bold white]",
-            border_style="cyan",
-            expand=False,
-            padding=(0, 2),
-        )
-    )
+    _log("PHASE 2", "Building — generate, review, verify, fix")
     success = execute_plan(ctx, output_dir)
 
     # -- Save metadata
@@ -385,24 +422,50 @@ def _cmd_build(
         "completed": success,
     })
 
+    # -- Final status
+    console.print()
     if success:
-        console.print(
-            Panel(
-                "[bold cyan]Build complete.[/bold cyan]",
-                border_style="cyan",
-                expand=False,
-                padding=(0, 2),
-            )
-        )
+        _log("DONE", "Build complete — all files verified")
     else:
-        console.print(
-            Panel(
-                "[bold white]Build finished with issues.  Use 'plan' to see statuses.[/bold white]",
-                border_style="dim",
-                expand=False,
-                padding=(0, 2),
-            )
-        )
+        _log("DONE", "Build finished with issues — type 'plan' to inspect")
+
+    console.print(f"  [dim]Saved to:[/dim] [cyan]{output_dir}[/cyan]\n")
+    return ctx, output_dir
+
+
+def _cmd_continue(settings_mgr: SettingsManager) -> tuple[ContextManager, Path] | None:
+    """Resume the last project, or pick from the list."""
+    projects = settings_mgr.list_projects()
+
+    if not projects:
+        console.print("  [dim]No saved projects. Use 'build <prompt>' to start one.[/dim]")
+        return None
+
+    if len(projects) == 1:
+        proj = projects[0]
+    else:
+        names = [f"{p.get('name', '?')}  [dim]({('done' if p.get('completed') else 'in progress')})[/dim]" for p in projects]
+        idx = _select_one("Pick a project to continue:", names)
+        if idx is None:
+            return None
+        proj = projects[idx]
+
+    output_dir = Path(proj.get("output_dir", ""))
+    session_file = output_dir / ".jcode_session.json"
+
+    if not session_file.exists():
+        console.print(f"  [dim]No session file at {session_file}[/dim]")
+        return None
+
+    ctx = ContextManager.load_session(session_file)
+    _log("LOADED", f"{proj.get('name', '?')}")
+    console.print(f"  [dim]{output_dir}[/dim]")
+
+    if not proj.get("completed", False):
+        console.print()
+        choice = _select_one("Resume building?", ["Yes — continue where I left off", "No — just inspect"])
+        if choice == 0:
+            execute_plan(ctx, output_dir)
 
     return ctx, output_dir
 
@@ -488,38 +551,18 @@ def _cmd_projects(settings_mgr: SettingsManager) -> None:
     console.print(table)
 
 
-def _cmd_resume(settings_mgr: SettingsManager) -> tuple[ContextManager | None, Path | None]:
-    """Resume the last project."""
-    proj = settings_mgr.get_last_project()
-    if not proj:
-        console.print("  [dim]No previous project to resume.[/dim]")
-        return None, None
-
-    output_dir = Path(proj.get("output_dir", ""))
-    session_file = output_dir / ".jcode_session.json"
-
-    if not session_file.exists():
-        console.print(f"  [dim]No session file at {session_file}[/dim]")
-        return None, None
-
-    ctx = ContextManager.load_session(session_file)
-    console.print(f"  [cyan]Resumed: {proj.get('name', '?')}[/cyan]")
-    console.print(f"  [dim]{output_dir}[/dim]")
-    return ctx, output_dir
-
-
 def _cmd_update() -> None:
     """Self-update JCode from git."""
     jcode_root = Path(__file__).resolve().parent.parent
 
-    console.print(f"  [dim]Install path: {jcode_root}[/dim]")
+    _log("UPDATE", f"Installed at {jcode_root}")
     console.print(f"  [dim]Current version: v{__version__}[/dim]")
 
     if not (jcode_root / ".git").exists():
         console.print("  [dim]Not a git install. Cannot auto-update.[/dim]")
         return
 
-    console.print("  [dim]Pulling latest...[/dim]")
+    _log("UPDATE", "Pulling latest changes")
     try:
         result = subprocess.run(
             ["git", "-C", str(jcode_root), "pull", "--ff-only"],
@@ -539,7 +582,7 @@ def _cmd_update() -> None:
         console.print("  [dim]Git pull timed out.[/dim]")
         return
 
-    console.print("  [dim]Re-installing...[/dim]")
+    _log("UPDATE", "Re-installing dependencies")
     try:
         subprocess.run(
             [sys.executable, "-m", "pip", "install", "-e", str(jcode_root), "-q"],
@@ -558,8 +601,68 @@ def _cmd_update() -> None:
     except Exception:
         new_version = "unknown"
 
-    console.print(f"  [cyan]Updated to v{new_version}[/cyan]")
+    _log("UPDATE", f"Updated to v{new_version}")
     console.print("  [dim]Restart JCode to use the new version.[/dim]")
+
+
+def _cmd_uninstall(settings_mgr: SettingsManager) -> None:
+    """Uninstall JCode: move projects to Desktop, remove install + config."""
+    console.print()
+    console.print("  [bold white]Uninstall JCode[/bold white]")
+    console.print()
+
+    # Explain what will happen
+    projects_dir = settings_mgr.get_default_output_dir()
+    desktop = Path.home() / "Desktop" / "jcode_projects_backup"
+    jcode_root = Path(__file__).resolve().parent.parent
+    config_dir = Path.home() / ".jcode"
+
+    console.print(f"  [dim]This will:[/dim]")
+    console.print(f"    [dim]1. Copy your projects to[/dim] [cyan]{desktop}[/cyan]")
+    console.print(f"    [dim]2. Uninstall the jcode package[/dim]")
+    console.print(f"    [dim]3. Remove config at[/dim] [cyan]{config_dir}[/cyan]")
+    console.print()
+
+    choice = _select_one("Proceed with uninstall?", [
+        "Yes — uninstall and save projects to Desktop",
+        "No  — cancel",
+    ])
+
+    if choice != 0:
+        console.print("  [dim]Cancelled.[/dim]")
+        return
+
+    # Step 1: Copy projects to Desktop
+    if projects_dir.exists():
+        _log("UNINSTALL", f"Copying projects to {desktop}")
+        desktop.mkdir(parents=True, exist_ok=True)
+        for item in projects_dir.iterdir():
+            dest = desktop / item.name
+            try:
+                if item.is_dir():
+                    shutil.copytree(item, dest, dirs_exist_ok=True)
+                else:
+                    shutil.copy2(item, dest)
+            except Exception as e:
+                console.print(f"  [dim]Could not copy {item.name}: {e}[/dim]")
+        _log("UNINSTALL", "Projects saved")
+
+    # Step 2: pip uninstall
+    _log("UNINSTALL", "Removing jcode package")
+    subprocess.run(
+        [sys.executable, "-m", "pip", "uninstall", "jcode", "-y"],
+        capture_output=True, text=True,
+    )
+
+    # Step 3: Remove config
+    if config_dir.exists():
+        _log("UNINSTALL", "Removing config directory")
+        shutil.rmtree(config_dir, ignore_errors=True)
+
+    _log("UNINSTALL", "Done")
+    console.print(f"\n  [cyan]Your projects are saved at:[/cyan] {desktop}")
+    console.print(f"  [dim]To remove the source code:[/dim] [cyan]rm -rf {jcode_root}[/cyan]\n")
+    sys.exit(0)
 
 
 def _cmd_save(ctx: ContextManager | None, output_dir: Path | None) -> None:
@@ -567,69 +670,19 @@ def _cmd_save(ctx: ContextManager | None, output_dir: Path | None) -> None:
     if not ctx or not output_dir:
         console.print("  [dim]Nothing to save.[/dim]")
         return
-
     session_file = output_dir / ".jcode_session.json"
     ctx.save_session(session_file)
-    console.print(f"  [cyan]Session saved to {session_file}[/cyan]")
-
-
-def _cmd_load(path_str: str) -> tuple[ContextManager | None, Path | None]:
-    """Load a session from a file."""
-    if not path_str:
-        console.print("  [dim]Usage: load <path-to-session-file>[/dim]")
-        return None, None
-
-    session_file = Path(path_str).expanduser().resolve()
-    if not session_file.exists():
-        console.print(f"  [dim]File not found: {session_file}[/dim]")
-        return None, None
-
-    ctx = ContextManager.load_session(session_file)
-    output_dir = Path(ctx.state.output_dir) if ctx.state.output_dir else session_file.parent
-    console.print(f"  [cyan]Session loaded from {session_file}[/cyan]")
-    return ctx, output_dir
-
-
-def _cmd_settings(settings_mgr: SettingsManager) -> None:
-    """Show and optionally edit settings."""
-    s = settings_mgr.settings
-    console.print(
-        Panel(
-            f"Default output dir:  [cyan]{s.default_output_dir}[/cyan]\n"
-            f"Auto-save sessions:  {'yes' if s.auto_save_sessions else 'no'}\n"
-            f"Last project:        [dim]{s.last_project or 'None'}[/dim]",
-            title="Settings",
-            border_style="cyan",
-        )
-    )
-
-    change = pt_prompt("  Change default output directory? (enter new path or skip): ").strip()
-    if change:
-        new_path = Path(change).expanduser().resolve()
-        settings_mgr.set_default_output_dir(str(new_path))
-        console.print(f"  [cyan]Updated to: {new_path}[/cyan]")
+    _log("SAVED", str(session_file))
 
 
 # ═══════════════════════════════════════════════════════════════════
 # Helpers
 # ═══════════════════════════════════════════════════════════════════
 
-def _setup_wizard(settings_mgr: SettingsManager) -> None:
-    """First-run setup — minimal, no clutter."""
-    console.print()
-    console.print("  [bold cyan]First-Time Setup[/bold cyan]")
-    console.print("  [dim]JCode needs a directory to save your projects.[/dim]")
-    console.print()
-
-    default_path = "~/jcode_projects"
-    dir_input = pt_prompt(f"  Save location [{default_path}]: ").strip()
-
-    output_dir = dir_input if dir_input else default_path
-    output_path = Path(output_dir).expanduser().resolve()
-    output_path.mkdir(parents=True, exist_ok=True)
-
-    settings_mgr.set_default_output_dir(str(output_path))
-    console.print(f"  [cyan]Projects will be saved to: {output_path}[/cyan]\n")
+def _log(tag: str, message: str) -> None:
+    """Structured log line: [HH:MM:SS] TAG  message"""
+    ts = datetime.now().strftime("%H:%M:%S")
+    console.print(f"  [dim]{ts}[/dim]  [cyan]{tag:<10}[/cyan]  {message}")
 
 
 def _auto_save_on_exit(ctx: ContextManager | None, output_dir: Path | None) -> None:
@@ -638,7 +691,7 @@ def _auto_save_on_exit(ctx: ContextManager | None, output_dir: Path | None) -> N
         try:
             session_file = output_dir / ".jcode_session.json"
             ctx.save_session(session_file)
-            console.print(f"  [dim]Session saved to {session_file}[/dim]")
+            _log("SAVED", str(session_file))
         except Exception:
             pass
 

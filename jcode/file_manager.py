@@ -65,23 +65,23 @@ def _build_tree(directory: Path, tree: Tree) -> None:
 
 
 def _file_icon(suffix: str) -> str:
-    """Return an emoji icon based on file extension."""
+    """Return a short tag based on file extension."""
     icons = {
-        ".py": "🐍",
-        ".js": "🟨",
-        ".ts": "🔷",
-        ".jsx": "⚛️",
-        ".tsx": "⚛️",
-        ".html": "🌐",
-        ".css": "🎨",
-        ".json": "📋",
-        ".toml": "⚙️",
-        ".yaml": "⚙️",
-        ".yml": "⚙️",
-        ".md": "📝",
-        ".txt": "📄",
-        ".sql": "🗄️",
-        ".sh": "🐚",
-        ".env": "🔒",
+        ".py": "py",
+        ".js": "js",
+        ".ts": "ts",
+        ".jsx": "jsx",
+        ".tsx": "tsx",
+        ".html": "html",
+        ".css": "css",
+        ".json": "json",
+        ".toml": "toml",
+        ".yaml": "yaml",
+        ".yml": "yml",
+        ".md": "md",
+        ".txt": "txt",
+        ".sql": "sql",
+        ".sh": "sh",
+        ".env": "env",
     }
-    return icons.get(suffix, "📄")
+    return icons.get(suffix, "--")

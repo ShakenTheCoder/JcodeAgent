@@ -84,7 +84,7 @@ def analyze_error(
     )
     ctx.add_message("analyzer", "user", prompt)
 
-    console.print(f"[bold magenta]🔬 Analyzing error in [cyan]{file_path}[/cyan]…[/bold magenta]")
+    console.print(f"  [dim]Analyzing error in[/dim] [cyan]{file_path}[/cyan]")
 
     planner_ctx, _ = ctx.get_context_sizes()
     raw = call_analyzer(
@@ -96,7 +96,7 @@ def analyze_error(
     result = _extract_json(raw)
 
     # Display analysis
-    console.print(f"   Root cause: [bold]{result.get('root_cause', 'Unknown')}[/bold]")
-    console.print(f"   Fix: [dim]{result.get('fix_strategy', '')}[/dim]")
+    console.print(f"    [dim]Root cause:[/dim] {result.get('root_cause', 'Unknown')}")
+    console.print(f"    [dim]Fix:[/dim] {result.get('fix_strategy', '')}")
 
     return result
