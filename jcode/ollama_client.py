@@ -1,14 +1,15 @@
 """
 Ollama client wrapper — talks to the local Ollama server.
 
-v3.1 — Speed-first. NEVER pulls models. Handles timeouts gracefully.
+v4.0 — Multi-model intelligent routing.
 
 Key rules:
-  1. Only use locally installed models
-  2. If a model isn't available, fall back to what IS available
-  3. Never block a build with a model download
-  4. Handle Ollama being busy (concurrent JCode instances) gracefully
-  5. Filter <think> blocks from reasoning models during streaming
+  1. Only use locally installed models — NEVER pull.
+  2. Route each role to the best available model via config.get_model_for_role().
+  3. Handle reasoning models (deepseek-r1, qwen3 /think) — filter <think> blocks.
+  4. Handle Ollama being busy (concurrent instances) with retry logic.
+  5. Thread-safe parallel generation for wave-based execution.
+  6. Model-aware options (reasoning models get higher ctx, different temps).
 """
 
 from __future__ import annotations
@@ -22,7 +23,9 @@ from rich.console import Console
 from jcode.config import (
     PLANNER_MODEL, CODER_MODEL, REVIEWER_MODEL, ANALYZER_MODEL,
     PLANNER_OPTIONS, CODER_OPTIONS, REVIEWER_OPTIONS, ANALYZER_OPTIONS,
+    REASONING_OPTIONS, AGENTIC_OPTIONS,
     get_model_for_role, get_all_required_models, _is_model_local,
+    get_model_spec,
 )
 
 console = Console()
@@ -36,12 +39,11 @@ _stream_lock = threading.Lock()
 
 
 def _ensure_model(model: str) -> None:
-    """Check that the model is available. NEVER pulls — warns and falls back instead."""
+    """Check that the model is available. NEVER pulls — warns and falls back."""
     with _verified_lock:
         if model in _verified_models:
             return
 
-    # Check if available locally
     try:
         ollama.show(model)
         with _verified_lock:
@@ -50,23 +52,64 @@ def _ensure_model(model: str) -> None:
     except ollama.ResponseError:
         pass
 
-    # Model not available — warn but don't pull
     console.print(f"[yellow]⚠ Model {model} not installed. Using fallback.[/yellow]")
     with _verified_lock:
-        _verified_models.add(model)  # Don't keep checking
+        _verified_models.add(model)
 
 
-def ensure_models_for_complexity(complexity: str) -> None:
-    """Verify all models needed for a complexity level are available.
-    Reports missing models but NEVER pulls them during builds."""
-    models = get_all_required_models(complexity)
-    missing = []
-    for model in models:
-        if not _is_model_local(model):
-            missing.append(model)
-    if missing:
-        console.print(f"[yellow]⚠ Missing models: {', '.join(missing)}. Using available models.[/yellow]")
-        console.print(f"[dim]  Install with: ollama pull {' && ollama pull '.join(missing)}[/dim]")
+def _is_reasoning_model(model: str) -> bool:
+    """Check if a model is a reasoning model (produces <think> blocks)."""
+    spec = get_model_spec(model)
+    if spec and spec.supports_thinking:
+        return True
+    # Heuristic fallback for models not in registry
+    lower = model.lower()
+    return any(kw in lower for kw in ("deepseek-r1", "qwen3", "magistral", "phi4-reasoning", "glm-4"))
+
+
+def _get_options_for_model(
+    model: str,
+    role: str,
+    base_options: dict,
+    num_ctx_override: int | None = None,
+) -> dict:
+    """Get generation options tuned for the specific model being used.
+
+    Reasoning models get different temperatures and larger context.
+    Agentic models get agentic options.
+    """
+    spec = get_model_spec(model)
+
+    # Start with role-specific base
+    options = base_options.copy()
+
+    # Override with model-category-specific settings
+    if spec:
+        if spec.category == "reasoning":
+            # Reasoning models need higher temp for exploration, bigger context
+            options["temperature"] = max(options.get("temperature", 0.3), 0.35)
+            options["num_ctx"] = max(options.get("num_ctx", 8192), REASONING_OPTIONS["num_ctx"])
+        elif spec.category == "agentic":
+            options["num_ctx"] = max(options.get("num_ctx", 8192), AGENTIC_OPTIONS["num_ctx"])
+    elif _is_reasoning_model(model):
+        # Fallback for unregistered reasoning models
+        options["num_ctx"] = max(options.get("num_ctx", 8192), 16384)
+
+    if num_ctx_override:
+        options["num_ctx"] = num_ctx_override
+
+    return options
+
+
+def ensure_models_for_complexity(
+    complexity: str,
+    size: str = "medium",
+) -> None:
+    """Verify all models needed for a classification are available.
+    Reports missing but NEVER pulls during builds."""
+    models = get_all_required_models(complexity, size)
+    if not models:
+        console.print("[yellow]⚠ No models found for this classification. Install models with: ollama pull <model>[/yellow]")
 
 
 def check_ollama_running() -> bool:
@@ -82,7 +125,13 @@ def list_available_models() -> list[str]:
     """Return a list of model names available locally."""
     try:
         response = ollama.list()
-        return [m.get("name", "") for m in response.get("models", [])]
+        models = response.get("models", []) if isinstance(response, dict) else []
+        if not models and hasattr(response, "models"):
+            models = response.models or []
+        return [
+            (m.get("name", "") if isinstance(m, dict) else getattr(m, "model", ""))
+            for m in models
+        ]
     except Exception:
         return []
 
@@ -95,33 +144,41 @@ def call_model(
     stream: bool = True,
     num_ctx: int | None = None,
     complexity: str = "medium",
+    size: str = "medium",
+    model_override: str | None = None,
 ) -> str:
     """
-    Send messages to the appropriate model based on role + complexity.
+    Send messages to the best available model for role + classification.
 
     Args:
-        role: One of 'planner', 'coder', 'reviewer', 'analyzer'.
+        role: One of 'planner', 'coder', 'reviewer', 'analyzer', 'chat'.
         messages: Chat messages.
         stream: Whether to stream output to console.
         num_ctx: Override context window size.
-        complexity: Project complexity for model tier selection.
+        complexity: Task complexity for model routing.
+        size: Task size for model routing.
+        model_override: Force a specific model (bypasses routing).
     """
-    # Resolve model dynamically based on role + complexity
-    model = get_model_for_role(role, complexity)
+    # Resolve model
+    if model_override:
+        model = model_override
+    else:
+        model = get_model_for_role(role, complexity, size)
 
+    # Get role-specific base options
     options_map = {
         "planner": PLANNER_OPTIONS,
         "coder": CODER_OPTIONS,
         "reviewer": REVIEWER_OPTIONS,
         "analyzer": ANALYZER_OPTIONS,
+        "chat": CODER_OPTIONS,       # Chat uses coder defaults
     }
-
     base_options = options_map.get(role, CODER_OPTIONS)
+
     _ensure_model(model)
 
-    options = base_options.copy()
-    if num_ctx:
-        options["num_ctx"] = num_ctx
+    # Build final options (model-aware)
+    options = _get_options_for_model(model, role, base_options, num_ctx)
 
     try:
         if stream:
@@ -131,7 +188,7 @@ def call_model(
     except Exception as e:
         err_str = str(e).lower()
         if "busy" in err_str or "timeout" in err_str or "connection" in err_str:
-            console.print(f"\n[yellow]⚠ Ollama is busy (another instance running?). Retrying...[/yellow]")
+            console.print(f"\n[yellow]⚠ Ollama busy. Retrying in 3s...[/yellow]")
             import time
             time.sleep(3)
             try:
@@ -141,7 +198,7 @@ def call_model(
                     return _generate_silent(model, messages, options)
             except Exception as retry_err:
                 console.print(f"\n[red]✗ Ollama error: {retry_err}[/red]")
-                console.print("[dim]  Is another JCode instance running? Only one can generate at a time.[/dim]")
+                console.print("[dim]  Is another JCode instance running?[/dim]")
                 return ""
         raise
 
@@ -151,26 +208,29 @@ def call_model_silent(
     messages: list[dict[str, str]],
     num_ctx: int | None = None,
     complexity: str = "medium",
+    size: str = "medium",
+    model_override: str | None = None,
 ) -> str:
-    """
-    Thread-safe silent generation (no streaming). Used by parallel workers.
-    """
-    return call_model(role, messages, stream=False, num_ctx=num_ctx, complexity=complexity)
+    """Thread-safe silent generation (no streaming). Used by parallel workers."""
+    return call_model(
+        role, messages, stream=False, num_ctx=num_ctx,
+        complexity=complexity, size=size, model_override=model_override,
+    )
 
 
-# Legacy convenience wrappers (used by existing callers)
+# Legacy convenience wrappers (backward compat)
 
-def call_planner(messages, stream=True, num_ctx=None, complexity="medium") -> str:
-    return call_model("planner", messages, stream, num_ctx, complexity)
+def call_planner(messages, stream=True, num_ctx=None, complexity="medium", size="medium") -> str:
+    return call_model("planner", messages, stream, num_ctx, complexity, size)
 
-def call_coder(messages, stream=True, num_ctx=None, complexity="medium") -> str:
-    return call_model("coder", messages, stream, num_ctx, complexity)
+def call_coder(messages, stream=True, num_ctx=None, complexity="medium", size="medium") -> str:
+    return call_model("coder", messages, stream, num_ctx, complexity, size)
 
-def call_reviewer(messages, stream=True, num_ctx=None, complexity="medium") -> str:
-    return call_model("reviewer", messages, stream, num_ctx, complexity)
+def call_reviewer(messages, stream=True, num_ctx=None, complexity="medium", size="medium") -> str:
+    return call_model("reviewer", messages, stream, num_ctx, complexity, size)
 
-def call_analyzer(messages, stream=True, num_ctx=None, complexity="medium") -> str:
-    return call_model("analyzer", messages, stream, num_ctx, complexity)
+def call_analyzer(messages, stream=True, num_ctx=None, complexity="medium", size="medium") -> str:
+    return call_model("analyzer", messages, stream, num_ctx, complexity, size)
 
 
 def _generate_silent(model: str, messages: list[dict], options: dict) -> str:
@@ -192,6 +252,7 @@ def _stream(model: str, messages: list[dict], options: dict) -> str:
     Uses a lock so parallel streams don't interleave."""
     chunks: list[str] = []
     in_think = False
+    is_reasoning = _is_reasoning_model(model)
 
     with _stream_lock:
         for chunk in ollama.chat(
@@ -203,15 +264,16 @@ def _stream(model: str, messages: list[dict], options: dict) -> str:
             token = chunk["message"]["content"]
             chunks.append(token)
 
-            # Filter <think> blocks — don't show them to the user
-            if "<think>" in token:
-                in_think = True
-                continue
-            if "</think>" in token:
-                in_think = False
-                continue
-            if in_think:
-                continue
+            # Filter <think> blocks from reasoning models
+            if is_reasoning:
+                if "<think>" in token:
+                    in_think = True
+                    continue
+                if "</think>" in token:
+                    in_think = False
+                    continue
+                if in_think:
+                    continue
 
             console.print(token, end="", highlight=False)
         console.print()  # newline after stream

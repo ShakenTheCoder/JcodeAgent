@@ -8,7 +8,7 @@
 # What it does (only if not already installed):
 #   1. Installs Python 3.12+
 #   2. Installs Ollama
-#   3. Pulls AI models (qwen2.5-coder:14b, qwen2.5-coder:7b)
+#   3. Pulls AI models (qwen2.5-coder:14b, qwen2.5-coder:7b, deepseek-r1:14b)
 #   4. Clones/updates JCode
 #   5. Creates venv + installs dependencies
 #   6. Adds 'jcode' to your PATH
@@ -17,10 +17,11 @@
 $ErrorActionPreference = "Stop"
 
 # ── Config ─────────────────────────────────────────────────────────
+# Models: coding (qwen2.5-coder) + reasoning (deepseek-r1) for multi-model routing
 $JCODE_HOME  = if ($env:JCODE_HOME) { $env:JCODE_HOME } else { Join-Path $env:USERPROFILE "JcodeAgent" }
 $JCODE_REPO  = "https://github.com/ShakenTheCoder/JcodeAgent.git"
 $MIN_PYTHON  = [version]"3.10"
-$MODELS      = @("qwen2.5-coder:14b", "qwen2.5-coder:7b")
+$MODELS      = @("qwen2.5-coder:14b", "qwen2.5-coder:7b", "deepseek-r1:14b")
 $PYTHON_CMD  = ""
 
 # ── Helpers ────────────────────────────────────────────────────────

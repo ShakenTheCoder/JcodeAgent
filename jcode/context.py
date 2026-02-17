@@ -185,9 +185,13 @@ class ContextManager:
     def get_complexity(self) -> str:
         return self.state.complexity
 
+    def get_size(self) -> str:
+        return getattr(self.state, "size", "medium")
+
     def get_context_sizes(self) -> tuple[int, int]:
         c = self.state.complexity
-        return get_context_size(c, True), get_context_size(c, False)
+        s = self.get_size()
+        return get_context_size(c, s, True), get_context_size(c, s, False)
 
     # ── Conversation management ────────────────────────────────────
 

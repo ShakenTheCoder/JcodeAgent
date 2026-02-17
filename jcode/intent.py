@@ -6,14 +6,15 @@ for obvious commands. Falls back to LLM for ambiguous input.
 
 Intents:
   BUILD     — create a new project from scratch
-  MODIFY    — change/fix/add to existing code (agentic mode)
+  MODIFY    — change/fix/add to existing code (agent mode)
   CHAT      — ask questions, discuss, explain (chat mode)
   GIT       — version control operations
   RUN       — run/start/test the project
   NAVIGATE  — utility commands (files, tree, plan, help, etc.)
+  MODE      — switch between agent/chat mode
   QUIT      — exit/back
 
-v0.7.0 — JCode lives inside your project.
+v0.9.0 — Simplified mode switching: just type "agent" or "chat".
 """
 
 from __future__ import annotations
@@ -25,11 +26,12 @@ from enum import Enum
 class Intent(str, Enum):
     """User intent categories."""
     BUILD    = "build"      # Create new project from scratch
-    MODIFY   = "modify"     # Change/fix/add code (agentic)
+    MODIFY   = "modify"     # Change/fix/add code (agent mode)
     CHAT     = "chat"       # Discussion, questions, explain
     GIT      = "git"        # Version control
     RUN      = "run"        # Run/start/test project
     NAVIGATE = "navigate"   # Utility: files, tree, plan, help
+    MODE     = "mode"       # Switch agent/chat mode
     QUIT     = "quit"       # Exit/back
 
 
@@ -46,6 +48,11 @@ _EXACT_COMMANDS: dict[str, Intent] = {
     "back": Intent.QUIT,
     "home": Intent.QUIT,
 
+    # Mode switching — just type "agent" or "chat"
+    "agent": Intent.MODE,
+    "chat": Intent.MODE,
+    "agentic": Intent.MODE,
+
     # Navigate
     "help": Intent.NAVIGATE,
     "files": Intent.NAVIGATE,
@@ -56,6 +63,7 @@ _EXACT_COMMANDS: dict[str, Intent] = {
     "version": Intent.NAVIGATE,
     "update": Intent.NAVIGATE,
     "uninstall": Intent.NAVIGATE,
+    "models": Intent.NAVIGATE,
 
     # Run
     "run": Intent.RUN,
@@ -92,9 +100,10 @@ _PREFIX_COMMANDS: list[tuple[str, Intent]] = [
     ("clone ", Intent.GIT),
     ("branch ", Intent.GIT),
 
-    # Mode switch
-    ("mode ", Intent.NAVIGATE),
-    ("switch ", Intent.NAVIGATE),
+    # Mode switch (legacy "mode" prefix also works)
+    ("mode ", Intent.MODE),
+    ("switch to ", Intent.MODE),
+    ("switch ", Intent.MODE),
 ]
 
 # Keyword patterns for intent detection
@@ -241,6 +250,7 @@ def intent_label(intent: Intent) -> str:
         Intent.GIT:      "📦 Git",
         Intent.RUN:      "▶️  Run",
         Intent.NAVIGATE: "📂 Navigate",
+        Intent.MODE:     "🔄 Mode",
         Intent.QUIT:     "👋 Quit",
     }
     return labels.get(intent, str(intent))

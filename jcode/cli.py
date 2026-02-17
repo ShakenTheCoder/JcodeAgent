@@ -1,19 +1,14 @@
 """
-JCode CLI v7.0 — CWD-aware, dual-mode (agentic + chat), git-native.
+JCode CLI v9.0 — Intelligent multi-model orchestrator.
 
-JCode now lives inside your project directory.
+JCode lives inside your project directory. Two modes:
+  AGENT — autonomous: plan → research → generate → review → verify → commit
+  CHAT  — conversational: ask questions, discuss, get explanations
 
-Flow:
-  1. Open VS Code → create/open project folder → open terminal
-  2. Run `jcode` — it scans the current directory
-  3. Chat naturally or let it build autonomously
+Switch modes instantly by typing "agent" or "chat".
 
-Modes:
-  AGENTIC — autonomous: plan → generate → review → verify → commit
-  CHAT    — conversational: ask questions, discuss, get explanations
-
-The intent router classifies user input without calling the LLM,
-so common commands are instant.
+Task classification: complexity (heavy/medium/simple) × size (large/medium/small)
+→ routes each role to the best available model automatically.
 """
 
 from __future__ import annotations
@@ -36,16 +31,22 @@ from prompt_toolkit import prompt as pt_prompt
 from prompt_toolkit.history import InMemoryHistory
 
 from jcode import __version__
-from jcode.config import ProjectState, detect_complexity, get_model_for_role, get_all_required_models
+from jcode.config import (
+    ProjectState, classify_task, get_model_for_role, get_all_required_models,
+    describe_model_plan, detect_complexity,
+)
 from jcode.context import ContextManager
 from jcode.planner import create_plan
 from jcode.iteration import execute_plan
 from jcode.file_manager import print_tree
-from jcode.ollama_client import check_ollama_running, call_model, ensure_models_for_complexity
+from jcode.ollama_client import check_ollama_running, call_model, ensure_models_for_complexity, list_available_models
 from jcode.settings import SettingsManager
 from jcode.executor import set_autonomous
-from jcode.web import set_internet_access, web_search, fetch_page, search_and_summarize
-from jcode.prompts import CHAT_SYSTEM, CHAT_CONTEXT, AGENTIC_SYSTEM, AGENTIC_TASK
+from jcode.web import set_internet_access, web_search, fetch_page, search_and_summarize, research_task, is_internet_allowed
+from jcode.prompts import (
+    CHAT_SYSTEM, CHAT_CONTEXT, AGENTIC_SYSTEM, AGENTIC_TASK,
+    RESEARCH_SYSTEM, RESEARCH_TASK, PLANNER_RESEARCH_CONTEXT,
+)
 from jcode.intent import Intent, classify_intent, intent_label
 from jcode.scanner import scan_project, detect_project_type, scan_files
 from jcode import git_manager
@@ -68,9 +69,8 @@ HELP_TEXT = """
 [bold white]Commands[/bold white]
 
   [bold cyan]Modes[/bold cyan]
-  [cyan]mode[/cyan]               Show or switch mode (agentic / chat)
-  [cyan]mode agentic[/cyan]       Switch to agentic mode (autonomous changes)
-  [cyan]mode chat[/cyan]          Switch to chat mode (conversation only)
+  [cyan]agent[/cyan]              Switch to agent mode (autonomous changes)
+  [cyan]chat[/cyan]               Switch to chat mode (conversation only)
 
   [bold cyan]Build & Modify[/bold cyan]
   [cyan]build[/cyan] <prompt>     Plan and build a new project from scratch
@@ -91,6 +91,7 @@ HELP_TEXT = """
   [cyan]files[/cyan]             List all project files
   [cyan]tree[/cyan]              Show directory tree
   [cyan]plan[/cyan]              Show current build plan
+  [cyan]models[/cyan]            Show available models and routing
 
   [bold cyan]Utility[/bold cyan]
   [cyan]version[/cyan]            Show JCode version
@@ -212,7 +213,11 @@ def main():
         )
         sys.exit(1)
     console.print("  [cyan]Ollama connected[/cyan]")
-    console.print("  [dim]Smart model tiering enabled — models auto-selected by complexity[/dim]")
+
+    # Show available models
+    available = list_available_models()
+    model_count = len([m for m in available if m])
+    console.print(f"  [dim]Multi-model routing enabled — {model_count} model(s) available[/dim]")
 
     # -- Detect project directory (CWD)
     project_dir = Path.cwd().resolve()
@@ -258,7 +263,10 @@ def main():
 
     # -- Mode
     mode = settings_mgr.settings.default_mode
-    console.print(f"  [cyan]Mode:[/cyan] {mode}")
+    # Normalize legacy "agentic" to "agent"
+    if mode == "agentic":
+        mode = "agent"
+    console.print(f"  [cyan]Mode:[/cyan] {mode}  [dim](type 'agent' or 'chat' to switch)[/dim]")
 
     # -- Hint
     console.print()
@@ -344,7 +352,7 @@ def _repl(
 
     while True:
         try:
-            mode_indicator = "⚡" if mode == "agentic" else "💬"
+            mode_indicator = "⚡" if mode == "agent" else "💬"
             user_input = pt_prompt(
                 f"{mode_indicator} {proj_name}> ", history=history,
             ).strip()
@@ -365,23 +373,36 @@ def _repl(
             console.print("  [dim]Goodbye.[/dim]\n")
             break
 
+        elif intent == Intent.MODE:
+            # Instant mode switching — just type "agent" or "chat"
+            lower = user_input.lower().strip()
+            # Extract mode name from various forms
+            new_mode = None
+            if lower in ("agent", "agentic"):
+                new_mode = "agent"
+            elif lower == "chat":
+                new_mode = "chat"
+            elif lower.startswith("mode ") or lower.startswith("switch to ") or lower.startswith("switch "):
+                # Extract from "mode agent", "switch to chat", etc.
+                parts = lower.replace("switch to ", "").replace("switch ", "").replace("mode ", "").strip()
+                if parts in ("agent", "agentic"):
+                    new_mode = "agent"
+                elif parts == "chat":
+                    new_mode = "chat"
+
+            if new_mode:
+                mode = new_mode
+                settings_mgr.settings.default_mode = mode
+                settings_mgr.save_settings()
+                emoji = "⚡" if mode == "agent" else "💬"
+                console.print(f"  {emoji} [cyan]Switched to {mode} mode[/cyan]")
+            else:
+                console.print(f"  [cyan]Current mode:[/cyan] {mode}")
+                console.print(f"  [dim]Type 'agent' or 'chat' to switch[/dim]")
+
         elif intent == Intent.NAVIGATE:
             lower = user_input.lower().strip()
-            if lower.startswith("mode "):
-                new_mode = lower.split(None, 1)[1].strip()
-                if new_mode in ("agentic", "chat"):
-                    mode = new_mode
-                    settings_mgr.settings.default_mode = mode
-                    settings_mgr.save_settings()
-                    console.print(f"  [cyan]Switched to {mode} mode[/cyan]")
-                else:
-                    console.print(f"  [cyan]Current mode:[/cyan] {mode}")
-                    console.print(f"  [dim]Available: 'mode agentic' or 'mode chat'[/dim]")
-            elif lower == "mode":
-                console.print(f"  [cyan]Current mode:[/cyan] {mode}")
-                console.print(f"  [dim]Switch: 'mode agentic' or 'mode chat'[/dim]")
-            else:
-                _handle_navigate(lower, ctx, project_dir, settings_mgr, mode)
+            _handle_navigate(lower, ctx, project_dir, settings_mgr, mode)
 
         elif intent == Intent.BUILD:
             prompt = content if content else user_input
@@ -389,7 +410,7 @@ def _repl(
             proj_name = ctx.state.name or project_dir.name
 
         elif intent == Intent.MODIFY:
-            if mode == "agentic":
+            if mode == "agent":
                 _cmd_agentic(ctx, project_dir, user_input, settings_mgr)
             else:
                 _cmd_chat(ctx, project_dir, user_input)
@@ -435,6 +456,8 @@ def _handle_navigate(
         _cmd_tree(ctx, project_dir)
     elif cmd == "plan":
         _cmd_plan(ctx)
+    elif cmd == "models":
+        _cmd_models()
     elif cmd == "version":
         console.print(f"\n  [bold cyan]JCode[/bold cyan] [white]v{__version__}[/white]")
         console.print(f"  [dim]https://github.com/ShakenTheCoder/JcodeAgent[/dim]\n")
@@ -572,39 +595,72 @@ def _cmd_build(
     project_dir: Path,
     settings_mgr: SettingsManager,
 ) -> tuple[ContextManager, Path]:
-    """Full autonomous pipeline: plan > generate > review > verify > fix.
+    """Full autonomous pipeline: classify → research → plan → generate → review → verify → fix.
     Operates inside the current project directory (CWD)."""
 
     console.print(f"\n  [dim]Building in:[/dim] [cyan]{project_dir}[/cyan]")
 
-    complexity = detect_complexity(prompt)
-    console.print(f"  [dim]Complexity:[/dim] {complexity}")
+    # Classify the task (complexity × size)
+    classification = classify_task(prompt=prompt)
+    console.print(f"  [dim]Classification:[/dim] [bold]{classification.label}[/bold]"
+                  f"  [dim](complexity={classification.complexity.value}, size={classification.size.value})[/dim]")
 
-    # Show model tier assignment
+    # Show model routing for this classification
+    model_plan = describe_model_plan(classification.complexity.value, classification.size.value)
     console.print(f"  [dim]Models:[/dim]")
-    console.print(f"    [dim]Planner:[/dim]  [cyan]{get_model_for_role('planner', complexity)}[/cyan]")
-    console.print(f"    [dim]Coder:[/dim]    [cyan]{get_model_for_role('coder', complexity)}[/cyan]")
-    console.print(f"    [dim]Reviewer:[/dim] [cyan]{get_model_for_role('reviewer', complexity)}[/cyan]")
-    console.print(f"    [dim]Analyzer:[/dim] [cyan]{get_model_for_role('analyzer', complexity)}[/cyan]")
+    for role, model in model_plan.items():
+        console.print(f"    [dim]{role:>8}:[/dim]  [cyan]{model}[/cyan]")
 
-    # Pre-pull all required models for this complexity
-    _log("MODELS", f"Ensuring models for '{complexity}' complexity...")
-    ensure_models_for_complexity(complexity)
+    if classification.skip_review:
+        console.print(f"  [dim]Review:[/dim] [yellow]skipped[/yellow] (simple task)")
+    if not classification.skip_research:
+        console.print(f"  [dim]Research:[/dim] [green]enabled[/green] (heavy task)")
+
+    # Pre-check models
+    complexity_str = classification.complexity.value
+    size_str = classification.size.value
+    _log("MODELS", f"Ensuring models for '{classification.label}'...")
+    ensure_models_for_complexity(complexity_str, size_str)
 
     slug = _slugify(prompt[:40])
     state = ProjectState(
         name=slug,
         description=prompt,
         output_dir=project_dir,
-        complexity=complexity,
+        complexity=complexity_str,
+        size=size_str,
     )
     ctx = ContextManager(state)
+
+    # -- Phase 0: Research (heavy tasks only)
+    research_brief = ""
+    if not classification.skip_research and is_internet_allowed():
+        console.print()
+        _log("PHASE 0", "Researching — web search, docs, best practices")
+        research_brief = research_task(prompt)
+        if research_brief and not research_brief.startswith("["):
+            # Summarize research using a reasoning model if available
+            _log("RESEARCH", f"Gathered {len(research_brief)} chars of research context")
 
     # -- Phase 1: Planning
     console.print()
     _log("PHASE 1", "Planning project architecture")
-    plan = create_plan(prompt, ctx)
+
+    # For heavy tasks with research, augment the planning prompt
+    plan_prompt = prompt
+    if research_brief and not research_brief.startswith("["):
+        plan_prompt = prompt + PLANNER_RESEARCH_CONTEXT.format(research_brief=research_brief[:8000])
+
+    plan = create_plan(plan_prompt, ctx)
     ctx.set_plan(plan)
+
+    # Re-classify with full plan for more accurate routing
+    refined = classify_task(plan=plan)
+    if refined.label != classification.label:
+        console.print(f"  [dim]Refined classification:[/dim] [bold]{refined.label}[/bold]")
+        classification = refined
+        ctx.state.complexity = classification.complexity.value
+        ctx.state.size = classification.size.value
 
     task_count = len(plan.get("tasks", []))
     _log("PLAN", f"{task_count} task(s) created")
@@ -615,7 +671,7 @@ def _cmd_build(
 
     # -- Phase 2: Building
     console.print()
-    _log("PHASE 2", "Building -- generate, review, verify, fix")
+    _log("PHASE 2", "Building — generate, review, verify, fix")
     success = execute_plan(ctx, project_dir)
 
     # -- Save metadata
@@ -625,14 +681,15 @@ def _cmd_build(
         "output_dir": str(project_dir),
         "last_modified": datetime.now().isoformat(),
         "completed": success,
+        "classification": classification.label,
     })
 
     # -- Final status
     console.print()
     if success:
-        _log("DONE", "Build complete -- all files verified")
+        _log("DONE", "Build complete — all files verified")
     else:
-        _log("DONE", "Build finished with issues -- type 'plan' to inspect")
+        _log("DONE", "Build finished with issues — type 'plan' to inspect")
 
     _auto_save(ctx, project_dir)
 
@@ -1081,6 +1138,63 @@ def _install_deps_if_needed(project_dir: Path) -> None:
             _log("DEPS", "pip install complete")
         except Exception as e:
             console.print(f"  [dim]pip install failed: {e}[/dim]")
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Project info commands
+# ═══════════════════════════════════════════════════════════════════
+
+def _cmd_models() -> None:
+    """Show available models and how they're routed."""
+    from jcode.config import MODEL_REGISTRY, _is_model_local, describe_model_plan
+
+    console.print()
+    console.print("  [bold white]Installed Models & Routing[/bold white]\n")
+
+    # Show installed models grouped by category
+    categories: dict[str, list] = {}
+    for spec in MODEL_REGISTRY:
+        if _is_model_local(spec.name):
+            categories.setdefault(spec.category, []).append(spec)
+
+    if not categories:
+        console.print("  [yellow]No registered models found locally.[/yellow]")
+        console.print("  [dim]Install models with: ollama pull <model>[/dim]")
+        console.print("  [dim]Recommended: ollama pull qwen2.5-coder:14b[/dim]")
+        console.print()
+        return
+
+    table = Table(show_header=True, header_style="bold cyan", border_style="dim")
+    table.add_column("Model", style="white")
+    table.add_column("Category", style="cyan")
+    table.add_column("Size", justify="center")
+    table.add_column("Thinking", justify="center")
+    table.add_column("Tools", justify="center")
+
+    for cat in ("coding", "reasoning", "agentic", "fast", "general"):
+        specs = categories.get(cat, [])
+        for spec in sorted(specs, key=lambda s: s.priority):
+            table.add_row(
+                spec.name,
+                spec.category,
+                spec.size_class,
+                "✓" if spec.supports_thinking else "",
+                "✓" if spec.supports_tools else "",
+            )
+
+    console.print(table)
+    console.print()
+
+    # Show routing for each classification level
+    console.print("  [bold white]Model Routing by Classification[/bold white]\n")
+    for label in ("simple/small", "medium/medium", "heavy/large"):
+        parts = label.split("/")
+        plan = describe_model_plan(parts[0], parts[1])
+        console.print(f"  [dim]{label:>12}:[/dim]  "
+                      f"planner=[cyan]{plan['planner']}[/cyan]  "
+                      f"coder=[cyan]{plan['coder']}[/cyan]  "
+                      f"reviewer=[cyan]{plan['reviewer']}[/cyan]")
+    console.print()
 
 
 # ═══════════════════════════════════════════════════════════════════
