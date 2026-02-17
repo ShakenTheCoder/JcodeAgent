@@ -16,10 +16,12 @@ Model Registry (2025/2026 Ollama ecosystem):
   ┌─────────────────────┬───────────┬─────────────────────────────────────┐
   │ Category            │ Role      │ Best Models (in preference order)   │
   ├─────────────────────┼───────────┼─────────────────────────────────────┤
-  │ coding              │ coder     │ devstral, qwen2.5-coder, deepcoder │
+  │ coding              │ coder     │ qwen3-coder, devstral, qwen2.5-c.  │
   │ reasoning           │ planner   │ deepseek-r1, qwen3, magistral      │
   │ agentic             │ orchestr. │ gpt-oss, qwen3, glm-4.7            │
   │ fast                │ reviewer  │ qwen2.5-coder:7b, glm-4.7-flash   │
+  │ embedding           │ memory    │ all-minilm, nomic-embed-text       │
+  │ summarizer          │ compress  │ phi4, gemma3:4b                    │
   └─────────────────────┴───────────┴─────────────────────────────────────┘
 """
 
@@ -41,12 +43,13 @@ from enum import Enum
 class ModelSpec:
     """A model in the registry with its capabilities."""
     name: str               # e.g. "devstral:24b"
-    category: str           # coding | reasoning | agentic | fast | general
+    category: str           # coding | reasoning | agentic | fast | general | embedding | summarizer
     size_class: str         # small (≤8b) | medium (9-20b) | large (21b+)
     priority: int = 50      # Lower = preferred (within same category+size)
     supports_tools: bool = False
     supports_thinking: bool = False
     context_window: int = 32768
+    is_embedding: bool = False
 
 
 # ── Full Model Registry ───────────────────────────────────────────
@@ -55,14 +58,21 @@ class ModelSpec:
 
 MODEL_REGISTRY: list[ModelSpec] = [
     # ── CODING models (for file generation, patching) ──────────────
+    # Prefer qwen3-coder (2026) > devstral > qwen2.5-coder > deepseek-coder
+    ModelSpec("qwen3-coder:32b",      "coding",    "large",  5),
     ModelSpec("devstral:24b",          "coding",    "large",  10, supports_tools=True),
     ModelSpec("devstral-small:24b",    "coding",    "large",  15, supports_tools=True),
     ModelSpec("qwen2.5-coder:32b",    "coding",    "large",  20),
+    ModelSpec("deepseek-coder:33b",    "coding",    "large",  25),
+    ModelSpec("qwen3-coder:8b",       "coding",    "small",  5),
     ModelSpec("qwen2.5-coder:14b",    "coding",    "medium", 10),
     ModelSpec("deepcoder:14b",         "coding",    "medium", 15),
+    ModelSpec("deepseek-coder:6.7b",   "coding",    "small",  12),
     ModelSpec("qwen2.5-coder:7b",     "coding",    "small",  10),
 
     # ── REASONING models (for planning, analysis, deep thinking) ───
+    # DeepSeek-R1 is the strongest local reasoning model
+    ModelSpec("deepseek-r1:70b",      "reasoning", "large",  5,  supports_thinking=True),
     ModelSpec("deepseek-r1:32b",      "reasoning", "large",  10, supports_thinking=True),
     ModelSpec("deepseek-r1:14b",      "reasoning", "medium", 10, supports_thinking=True),
     ModelSpec("magistral:24b",         "reasoning", "large",  15, supports_thinking=True),
@@ -84,7 +94,18 @@ MODEL_REGISTRY: list[ModelSpec] = [
     ModelSpec("qwen3:4b",             "fast",      "small",  15, supports_tools=True),
     ModelSpec("qwen3:1.7b",           "fast",      "small",  25, supports_tools=True),
 
+    # ── SUMMARIZER models (for memory compression, context summaries) ──
+    ModelSpec("phi4:14b",             "summarizer", "medium", 10),
+    ModelSpec("phi3.5:latest",        "summarizer", "small",  15),
+    ModelSpec("gemma3:4b",            "summarizer", "small",  20),
+
+    # ── EMBEDDING models (for vector memory / RAG retrieval) ───────
+    ModelSpec("all-minilm:latest",    "embedding", "small",  10, is_embedding=True),
+    ModelSpec("nomic-embed-text:latest", "embedding", "small", 15, is_embedding=True),
+
     # ── GENERAL models (fallback for any role) ─────────────────────
+    ModelSpec("llama3.3:latest",      "general",   "small",  40),
+    ModelSpec("llama3.1:latest",      "general",   "small",  45),
     ModelSpec("llama3:latest",        "general",   "small",  50),
     ModelSpec("qwen3:8b",             "general",   "small",  30, supports_tools=True, supports_thinking=True),
     ModelSpec("qwen3:14b",            "general",   "medium", 30, supports_tools=True, supports_thinking=True),
@@ -432,6 +453,26 @@ def describe_model_plan(
         model = get_model_for_role(role, complexity, size)
         result[role] = model
     return result
+
+
+def get_embedding_model() -> str | None:
+    """Return the best locally-available embedding model, or None."""
+    for spec in MODEL_REGISTRY:
+        if spec.is_embedding and _is_model_local(spec.name):
+            return spec.name
+    return None
+
+
+def get_summarizer_model() -> str | None:
+    """Return the best locally-available summarizer model for memory compression."""
+    model = _find_best_model("summarizer", "small")
+    if model:
+        return model
+    model = _find_best_model("summarizer", "medium")
+    if model:
+        return model
+    # Fallback: fast coding model can summarize too
+    return _find_best_model("fast", "small")
 
 
 # ── Legacy constants (backward compat — resolved dynamically) ─────

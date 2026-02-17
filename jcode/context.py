@@ -19,6 +19,7 @@ from jcode.config import (
     ProjectState, TaskNode, TaskStatus,
     MAX_FILE_READ_CHARS, detect_complexity, get_context_size,
 )
+from jcode.memory import ProjectMemory
 
 # Thread lock for state mutations (file recording, failure logging)
 _state_lock = threading.Lock()
@@ -35,6 +36,7 @@ class ContextManager:
     4. Task DAG — ordered tasks with status
     5. Failure log — what broke and how it was fixed
     6. Conversation history per role (planner, coder)
+    7. Vector memory — embedding-based retrieval (optional, via ProjectMemory)
 
     Thread-safety:
     - record_file() and record_failure() are thread-safe
@@ -50,6 +52,7 @@ class ContextManager:
         self.analyzer_history: list[dict[str, str]] = []
         self.chat_history: list[dict[str, str]] = []    # per-project chat
         self._task_dag: list[TaskNode] = []
+        self.memory: ProjectMemory = ProjectMemory()
 
     # ── Plan & State ───────────────────────────────────────────────
 
@@ -137,16 +140,70 @@ class ContextManager:
         lines = [f"- `{path}`: {purpose}" for path, purpose in self.state.file_index.items()]
         return "\n".join(lines)
 
+    def get_spec_details(self) -> str:
+        """Return the planner's spec contract details (schema, API, auth, deploy).
+
+        These are injected into the coder prompt so the builder follows the
+        architectural spec exactly — no stack drift.
+        """
+        plan = self.state.plan
+        if not plan:
+            return "(no spec)"
+
+        parts: list[str] = []
+
+        # Database schema
+        schema = plan.get("database_schema")
+        if schema:
+            parts.append("### Database Schema")
+            for table, info in schema.items():
+                cols = info.get("columns", {})
+                col_lines = ", ".join(f"{c}: {t}" for c, t in cols.items())
+                parts.append(f"- **{table}**: {col_lines}")
+                for rel in info.get("relationships", []):
+                    parts.append(f"  - {rel}")
+
+        # API surface
+        api = plan.get("api_surface")
+        if api:
+            parts.append("### API Surface")
+            for endpoint in api:
+                parts.append(f"- {endpoint.get('method', '?')} {endpoint.get('path', '?')} — {endpoint.get('description', '')}")
+
+        # Auth flow
+        auth = plan.get("auth_flow")
+        if auth and auth != "none":
+            parts.append(f"### Auth Flow\n{auth}")
+
+        # Deployment
+        deploy = plan.get("deployment")
+        if deploy:
+            parts.append(f"### Deployment\n{deploy}")
+
+        return "\n\n".join(parts) if parts else "(simple project — no formal spec)"
+
     def get_dependency_context(self, file_path: str) -> str:
         """Get contents of files that the given file depends on."""
         deps = self.state.dependency_graph.get(file_path, [])
         return self.get_file_context(deps)
 
     def record_file(self, rel_path: str, content: str) -> None:
-        """Thread-safe: record a generated file's content."""
+        """Thread-safe: record a generated file's content and update memory index."""
         with _state_lock:
             self.state.files[rel_path] = content
             self.state.last_modified = datetime.now().isoformat()
+
+    def index_memory(self) -> int:
+        """Index all current files into the vector memory store.
+        Returns number of files indexed (0 if embedding not available)."""
+        return self.memory.index_files(self.state.files, self.state.file_index)
+
+    def get_relevant_files(self, query: str, top_k: int = 5) -> str:
+        """Use RAG to retrieve the most relevant file contents for a query.
+        Falls back to empty string if embedding is not available."""
+        return self.memory.get_relevant_context(
+            query, self.state.files, top_k=top_k
+        )
 
     def record_failure(self, file_path: str, error: str, fix: str, iteration: int) -> None:
         """Thread-safe: log a failure for the structured failure memory."""
@@ -298,6 +355,7 @@ class ContextManager:
                 "iteration": self.state.iteration,
                 "completed": self.state.completed,
                 "complexity": self.state.complexity,
+                "size": self.state.size,
                 "created_at": self.state.created_at,
                 "last_modified": datetime.now().isoformat(),
                 "architecture_summary": self.state.architecture_summary,
@@ -309,6 +367,7 @@ class ContextManager:
             "planner_history": self.planner_history,
             "coder_history": self.coder_history,
             "chat_history": self.chat_history,
+            "memory": self.memory.to_dict(),
         }
         path.write_text(json.dumps(data, indent=2))
 
@@ -327,6 +386,7 @@ class ContextManager:
             iteration=s["iteration"],
             completed=s["completed"],
             complexity=s.get("complexity", "medium"),
+            size=s.get("size", "medium"),
             created_at=s.get("created_at", ""),
             last_modified=s.get("last_modified", ""),
             architecture_summary=s.get("architecture_summary", ""),
@@ -341,4 +401,7 @@ class ContextManager:
         ctx.planner_history = data.get("planner_history", [])
         ctx.coder_history = data.get("coder_history", [])
         ctx.chat_history = data.get("chat_history", [])
+        # Restore vector memory
+        if "memory" in data:
+            ctx.memory = ProjectMemory.from_dict(data["memory"])
         return ctx

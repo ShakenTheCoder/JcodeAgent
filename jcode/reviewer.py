@@ -85,6 +85,7 @@ def review_file(file_path: str, ctx: ContextManager, parallel: bool = False) -> 
 
     _, coder_ctx = ctx.get_context_sizes()
     complexity = ctx.get_complexity()
+    size = ctx.get_size()
 
     if parallel:
         # Thread-safe silent mode — build messages locally
@@ -93,7 +94,7 @@ def review_file(file_path: str, ctx: ContextManager, parallel: bool = False) -> 
             {"role": "user", "content": prompt},
         ]
         console.print(f"  [dim]⚡ Reviewing[/dim] [cyan]{file_path}[/cyan]")
-        raw = call_model_silent("reviewer", messages, num_ctx=coder_ctx, complexity=complexity)
+        raw = call_model_silent("reviewer", messages, num_ctx=coder_ctx, complexity=complexity, size=size)
     else:
         ctx.reset_channel("reviewer")
         ctx.add_message("reviewer", "system", REVIEWER_SYSTEM)
@@ -104,6 +105,7 @@ def review_file(file_path: str, ctx: ContextManager, parallel: bool = False) -> 
             stream=False,  # Reviews don't need streaming
             num_ctx=coder_ctx,
             complexity=complexity,
+            size=size,
         )
 
     result = _extract_json(raw)

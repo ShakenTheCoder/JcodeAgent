@@ -78,6 +78,71 @@ class VerificationResult:
     def failed_checks(self) -> list[dict]:
         return [c for c in self.checks if not c["passed"]]
 
+    @property
+    def structured_errors(self) -> list[dict]:
+        """Parse error output into structured error objects.
+
+        Returns list of:
+        {
+            "file": str,       # affected file path
+            "line": int|None,  # line number if available
+            "category": str,   # syntax|lint|import|type|runtime
+            "message": str,    # human-readable error
+        }
+        """
+        import re as _re
+        errors = []
+        for check in self.failed_checks:
+            output = check.get("output", "")
+            name = check.get("name", "")
+
+            # Determine category from check name
+            if "syntax" in name:
+                category = "syntax"
+            elif "lint" in name:
+                category = "lint"
+            elif "import" in name:
+                category = "import"
+            elif "type" in name:
+                category = "type"
+            else:
+                category = "runtime"
+
+            matched = False
+
+            # Try to parse file:line patterns
+            # Python: File "path", line N
+            for m in _re.finditer(r'File "(.+?)", line (\d+)', output):
+                matched = True
+                errors.append({
+                    "file": m.group(1),
+                    "line": int(m.group(2)),
+                    "category": category,
+                    "message": output.strip()[:300],
+                })
+
+            # JS/TS/ruff: path:line:col: message
+            if not matched:
+                for m in _re.finditer(r'([^\s:]+\.\w+):(\d+):\d*:?\s*(.+)', output):
+                    matched = True
+                    errors.append({
+                        "file": m.group(1),
+                        "line": int(m.group(2)),
+                        "category": category,
+                        "message": m.group(3).strip()[:300],
+                    })
+
+            # If no patterns matched, add a generic entry
+            if not matched:
+                errors.append({
+                    "file": "",
+                    "line": None,
+                    "category": category,
+                    "message": output.strip()[:300],
+                })
+
+        return errors
+
 
 # ── Shell command execution ────────────────────────────────────────
 

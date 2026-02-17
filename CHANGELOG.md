@@ -1,5 +1,63 @@
 # Changelog
 
+## v0.9.1 — Spec Contracts, RAG Memory & Structured Errors
+
+Implements the frontier-grade coding agent blueprint: planner outputs formal specs, coder enforces them as contracts, embedding-based RAG memory provides cross-file context, and structured error parsing enables smarter fix loops.
+
+### Spec-as-Contract Pipeline
+- **Planner** now outputs formal spec fields: `database_schema`, `api_surface`, `auth_flow`, `deployment`
+- **Coder** enforces spec compliance: "NO STACK DRIFT — if the spec says React, don't use Vue"
+- `get_spec_details()` extracts spec from plan and injects into every CODER_TASK prompt
+- Simple projects gracefully skip formal spec fields
+
+### Embedding-Based RAG Memory (`memory.py`)
+- New `ProjectMemory` class with `FileEmbedding` dataclass
+- `index_files()`: embeds file summaries with MD5 change detection (skips unchanged files)
+- `retrieve()`: cosine similarity search over embeddings
+- `get_relevant_context()`: formatted RAG context for prompt injection
+- Lazy initialization — only activates when an embedding model is installed
+- Full serialization via `to_dict()` / `from_dict()` for session persistence
+- Graceful fallback: all methods return empty results if no embedding model available
+
+### RAG Integration
+- Memory indexed before first wave and re-indexed after each generation wave
+- Coder receives "Semantically Related" context from RAG alongside dependency context
+- Session save/load preserves vector memory embeddings
+- `ctx.index_memory()` and `ctx.get_relevant_files()` convenience methods on ContextManager
+
+### Expanded Model Registry
+- **Coding**: Added `qwen3-coder:32b/8b` (priority 5 — highest), `deepseek-coder:33b/6.7b`
+- **Reasoning**: Added `deepseek-r1:70b` (priority 5 for large reasoning tasks)
+- **Summarizer**: Added `phi4:14b`, `phi3.5:latest`, `gemma3:4b` — new category
+- **Embedding**: Added `all-minilm:latest`, `nomic-embed-text:latest` — new category
+- **General**: Added `llama3.3:latest`, `llama3.1:latest`
+- `ModelSpec` extended with `is_embedding: bool` field
+- New helpers: `get_embedding_model()`, `get_summarizer_model()`
+
+### Structured Error Parsing
+- `VerificationResult.structured_errors` property parses raw error output
+- Extracts Python errors (`File "path", line N`), JS/ruff errors (`path:line:col: message`)
+- Returns `{file, line, category, message}` dicts for targeted fix routing
+
+### Size Threading
+- `size` parameter now threaded through entire pipeline: planner → coder → reviewer → analyzer → iteration
+- All `get_model_for_role()` calls include both complexity and size
+- Display shows `Classification: complexity/size` throughout
+
+### Files Changed
+- `jcode/memory.py` — **New**: Full RAG memory module (230+ lines)
+- `jcode/config.py` — Expanded MODEL_REGISTRY, added embedding/summarizer categories and helpers
+- `jcode/prompts.py` — Planner spec schema, coder spec enforcement, CODER_TASK `{spec_details}`
+- `jcode/context.py` — ProjectMemory integration, spec extraction, session persistence
+- `jcode/coder.py` — RAG context injection, size threading, spec_details in prompts
+- `jcode/executor.py` — structured_errors property on VerificationResult
+- `jcode/iteration.py` — Memory indexing per wave, size threading
+- `jcode/planner.py` — Size threading, display update
+- `jcode/reviewer.py` — Size threading
+- `jcode/analyzer.py` — Size threading
+
+---
+
 ## v0.9.0 — Multi-Model Orchestrator
 
 Major architecture redesign — JCode becomes an intelligent orchestrator that classifies tasks by complexity and size, then routes to the best available model for each role.

@@ -26,6 +26,10 @@ Your job:
 3. Design a clear project structure with files and folders.
 4. Decompose implementation into a dependency-ordered task DAG.
 5. Write a brief architecture summary.
+6. Define database schema (if applicable).
+7. Define API surface (if applicable).
+8. Define auth flow (if applicable).
+9. Define deployment strategy (if applicable).
 
 RULES:
 - Respond with valid JSON only. No markdown fences around it.
@@ -36,6 +40,17 @@ RULES:
   "description": "one-line summary",
   "tech_stack": ["lang/framework", ...],
   "architecture_summary": "2-3 sentence high-level description of how the system works",
+  "database_schema": {
+    "table_name": {
+      "columns": {"col_name": "type + constraints"},
+      "relationships": ["description of FK/references"]
+    }
+  },
+  "api_surface": [
+    {"method": "GET/POST/etc", "path": "/api/...", "description": "what it does"}
+  ],
+  "auth_flow": "description of authentication/authorization strategy, or 'none'",
+  "deployment": "Docker/Vercel/static/etc — how to run and deploy this",
   "structure": {
     "path/to/file.ext": "brief description of this file's purpose"
   },
@@ -49,11 +64,14 @@ RULES:
   ]
 }
 
+- "database_schema", "api_surface", "auth_flow", "deployment" may be empty/null \
+  for simple projects that don't need them. Include them when relevant.
 - Order tasks by dependency (independent first).
 - Each file should appear in exactly ONE task.
 - Include config files (package.json, requirements.txt, etc.).
 - Keep it practical — don't over-engineer.
 - depends_on uses task IDs (integers), not file names.
+- The spec is a CONTRACT — the builder must follow it exactly. No stack drift.
 
 ARCHITECTURE RULES (CRITICAL — follow strictly):
 - Use FREE, no-signup APIs when possible: open-meteo.com for weather, \
@@ -69,6 +87,9 @@ ARCHITECTURE RULES (CRITICAL — follow strictly):
 - Minimize dependencies between tasks. If files are independent, set depends_on=[].
 - For web apps: prefer a single index.html with inline CSS and JS for simple \
   projects. Only split into separate files for medium+ complexity.
+- For complex projects: define CLEAR module boundaries. Each module should have \
+  a single responsibility. API routes in one place, database models in another, \
+  business logic separate from presentation.
 """
 
 PLANNER_REFINE = """\
@@ -95,17 +116,21 @@ CODER_SYSTEM = """\
 You are **JCode Coder**, an expert software developer.
 
 You will receive:
-- A project architecture summary
+- A project architecture summary (the SPEC — you must follow it exactly)
 - A file index showing every file and its purpose
+- Database schema, API surface, auth flow (if applicable)
 - A specific task describing what to implement
 - Relevant existing file contents
 
 RULES:
 - Output ONLY the complete file content. No explanations, no markdown fences.
 - Write clean, production-quality, well-commented code.
-- Follow the tech stack and conventions described.
+- Follow the tech stack and conventions described in the spec.
 - Include all necessary imports.
 - If fixing an existing file, output the FULL corrected file.
+- You are a BUILDER — you implement EXACTLY what the planner specified.
+- NO STACK DRIFT: if the spec says React, don't use Vue. If it says PostgreSQL, \
+  don't use SQLite. Follow the spec as a contract.
 
 QUALITY RULES (CRITICAL):
 - Code MUST work out of the box. No placeholder API keys, no TODO stubs.
@@ -122,6 +147,8 @@ QUALITY RULES (CRITICAL):
   color scheme.
 - For JS: use async/await, handle all error cases, update DOM with real data.
 - Test the code mentally before outputting. Trace through it. Will it work?
+- If a database schema is defined, your SQL/ORM must match it exactly.
+- If an API surface is defined, your routes must match it exactly.
 """
 
 CODER_TASK = """\
@@ -130,6 +157,9 @@ CODER_TASK = """\
 
 ## File Index
 {file_index}
+
+## Spec Contract
+{spec_details}
 
 ## Current Task
 File: `{file_path}`

@@ -59,7 +59,8 @@ def create_plan(user_prompt: str, ctx: ContextManager) -> dict:
     console.print("\n  [dim]Planning project architecture...[/dim]\n")
 
     complexity = ctx.get_complexity()
-    raw = call_planner(ctx.get_planner_messages(), stream=True, complexity=complexity)
+    size = ctx.get_size()
+    raw = call_planner(ctx.get_planner_messages(), stream=True, complexity=complexity, size=size)
     ctx.add_planner_message("assistant", raw)
 
     plan = _extract_json(raw)
@@ -67,7 +68,7 @@ def create_plan(user_prompt: str, ctx: ContextManager) -> dict:
 
     planner_ctx, coder_ctx = ctx.get_context_sizes()
     console.print(
-        f"\n[dim]Complexity: [bold]{ctx.get_complexity()}[/bold] "
+        f"\n[dim]Classification: [bold]{ctx.get_complexity()}/{ctx.get_size()}[/bold] "
         f"│ Planner ctx: {planner_ctx:,} │ Coder ctx: {coder_ctx:,}[/dim]"
     )
 
@@ -93,7 +94,8 @@ def refine_plan(ctx: ContextManager) -> dict:
 
     planner_ctx, _ = ctx.get_context_sizes()
     complexity = ctx.get_complexity()
-    raw = call_planner(ctx.get_planner_messages(), stream=True, num_ctx=planner_ctx, complexity=complexity)
+    size = ctx.get_size()
+    raw = call_planner(ctx.get_planner_messages(), stream=True, num_ctx=planner_ctx, complexity=complexity, size=size)
     ctx.add_planner_message("assistant", raw)
 
     plan = _extract_json(raw)

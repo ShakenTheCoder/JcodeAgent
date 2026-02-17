@@ -88,11 +88,13 @@ def analyze_error(
 
     planner_ctx, _ = ctx.get_context_sizes()
     complexity = ctx.get_complexity()
+    size = ctx.get_size()
     raw = call_analyzer(
         ctx.get_messages("analyzer"),
         stream=False,  # Analysis doesn't need streaming
         num_ctx=planner_ctx,
         complexity=complexity,
+        size=size,
     )
 
     result = _extract_json(raw)

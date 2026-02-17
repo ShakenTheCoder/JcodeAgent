@@ -80,12 +80,13 @@ def execute_plan(ctx: ContextManager, output_dir: Path) -> bool:
 
     # Show model tiering info
     complexity = ctx.get_complexity()
+    size = ctx.get_size()
     skip_review = complexity == "simple"
 
-    _log("ENGINE", f"Complexity: [bold]{complexity}[/bold]")
-    _log("ENGINE", f"Coder model:    {get_model_for_role('coder', complexity)}")
+    _log("ENGINE", f"Classification: [bold]{complexity}/{size}[/bold]")
+    _log("ENGINE", f"Coder model:    {get_model_for_role('coder', complexity, size)}")
     if not skip_review:
-        _log("ENGINE", f"Reviewer model: {get_model_for_role('reviewer', complexity)}")
+        _log("ENGINE", f"Reviewer model: {get_model_for_role('reviewer', complexity, size)}")
 
     # Compute waves for display
     try:
@@ -105,6 +106,9 @@ def execute_plan(ctx: ContextManager, output_dir: Path) -> bool:
 
     # -- Install deps before building
     install_dependencies(output_dir, ctx.state.tech_stack)
+
+    # -- Index existing project files into vector memory (for RAG)
+    ctx.index_memory()
 
     # -- Create worker pool
     pool = WorkerPool()
@@ -156,6 +160,9 @@ def execute_plan(ctx: ContextManager, output_dir: Path) -> bool:
 
             _show_task_progress(ctx)
             _auto_save_session(ctx, output_dir)
+
+            # Re-index vector memory with newly generated files
+            ctx.index_memory()
 
     finally:
         pool.shutdown(wait=True)
