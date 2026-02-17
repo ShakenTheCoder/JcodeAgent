@@ -107,6 +107,21 @@ _PREFIX_COMMANDS: list[tuple[str, Intent]] = [
 ]
 
 # Keyword patterns for intent detection
+_BUILD_PATTERNS: list[str] = [
+    r"\bbuild\b.*\b(?:app|application|project|website|site|page|tool|game|program|system|platform|service|dashboard)\b",
+    r"\b(?:app|application|project|website|site|tool|game|program|system|platform|service|dashboard)\b.*\bbuild\b",
+    r"\bcreate\b.*\b(?:app|application|project|website|site|page|tool|game|program|system|platform|service|dashboard)\b",
+    r"\bmake\b.*\b(?:app|application|project|website|site|page|tool|game|program|system|platform|service|dashboard)\b",
+    r"\b(?:i\s+)?want\s+(?:you\s+)?(?:to\s+)?(?:build|create|make|develop|code|write)\b",
+    r"\b(?:develop|code|write)\b.*\b(?:app|application|project|website|site|tool|game|program|system|platform|service|dashboard)\b",
+    r"\b(?:build|create|make)\s+(?:a|an|the|me|my)\b",
+    r"\b(?:new|from\s+scratch)\b.*\b(?:app|project|website|tool|game|program)\b",
+    r"\bscaffold\b", r"\bbootstrap\b",
+    r"\bgenerate\s+(?:a|an|the)\b",
+    r"\bset\s*up\s+(?:a|an|the|new)\b.*\b(?:app|project|website|tool)\b",
+    r"\bstart\s+(?:a|an)\s+(?:new\s+)?(?:app|project|website|tool)\b",
+]
+
 _MODIFY_PATTERNS: list[str] = [
     r"\bfix\b", r"\bbug\b", r"\berror\b", r"\bcrash\b",
     r"\badd\b.*\b(?:feature|function|component|page|route|endpoint|button|form)\b",
@@ -153,6 +168,11 @@ _RUN_PATTERNS: list[str] = [
     r"\bstart\s+(?:the|this|my)\b", r"\blaunch\b",
     r"\bexecute\b", r"\btest\s+(?:the|this|my|it)\b",
     r"\bnpm\s+(?:start|run|test)\b",
+    r"\bget\s+(?:the\s+)?(?:project|app|it)\s+running\b",
+    r"\bauto\s*run\b",
+    r"\brun\s+(?:the\s+)?(?:necessary|required|needed)\s+commands\b",
+    r"\binstall\s+(?:and\s+)?run\b",
+    r"\bstart\s+(?:the\s+)?(?:project|app|server|application)\b",
     r"\bpython\b.*\brun\b",
     r"\bdeploy\b",
 ]
@@ -202,6 +222,10 @@ def classify_intent(user_input: str) -> tuple[Intent, str]:
         Intent.RUN: 0,
     }
 
+    for pattern in _BUILD_PATTERNS:
+        if re.search(pattern, lower):
+            scores[Intent.BUILD] += 1.5  # BUILD gets a boost — building is the primary action
+
     for pattern in _MODIFY_PATTERNS:
         if re.search(pattern, lower):
             scores[Intent.MODIFY] += 1
@@ -223,6 +247,10 @@ def classify_intent(user_input: str) -> tuple[Intent, str]:
     if max_score > 0:
         # Find winning intent
         winner = max(scores, key=scores.get)
+
+        # BUILD always wins over CHAT — "build me an app" is a build, not a chat
+        if scores[Intent.BUILD] > 0 and winner == Intent.CHAT:
+            return Intent.BUILD, raw
 
         # If modify and chat are tied or close, check context clues
         if scores[Intent.MODIFY] > 0 and scores[Intent.CHAT] > 0:

@@ -416,7 +416,11 @@ def _repl(
                 _cmd_chat(ctx, project_dir, user_input)
 
         elif intent == Intent.CHAT:
-            _cmd_chat(ctx, project_dir, user_input)
+            # In agent mode, treat chat as agentic action (autonomous)
+            if mode == "agent":
+                _cmd_agentic(ctx, project_dir, user_input, settings_mgr)
+            else:
+                _cmd_chat(ctx, project_dir, user_input)
 
         elif intent == Intent.GIT:
             _handle_git(user_input, content, ctx, project_dir, settings_mgr)
@@ -785,16 +789,25 @@ def _cmd_agentic(
 
     response = call_model("coder", messages, stream=True)
 
-    # Apply file changes
+    # Apply file changes first (files before commands)
     files_written = _apply_file_changes(response, project_dir, ctx)
 
-    # Display response text (strip file blocks)
+    # Execute any ===RUN:=== or ===BACKGROUND:=== commands
+    commands_run = _apply_run_commands(response, project_dir)
+
+    # Display response text (strip file and command blocks)
     display_text = response
-    if files_written > 0:
+    if files_written > 0 or commands_run > 0:
         display_text = re.sub(
             r"===FILE:.*?===END===", "", response, flags=re.DOTALL
         ).strip()
-        _log("APPLIED", f"Modified {files_written} file(s)")
+        display_text = re.sub(
+            r"===(RUN|BACKGROUND):\s*.+?===", "", display_text, flags=re.IGNORECASE
+        ).strip()
+        if files_written > 0:
+            _log("APPLIED", f"Modified {files_written} file(s)")
+        if commands_run > 0:
+            _log("APPLIED", f"Executed {commands_run} command(s)")
 
     if display_text:
         console.print()
@@ -881,13 +894,22 @@ def _cmd_chat(ctx: ContextManager, project_dir: Path, user_message: str) -> None
     # Apply any file modifications found in the response
     files_written = _apply_file_changes(response, project_dir, ctx)
 
-    # Display the text response (strip file blocks from display)
+    # Execute any ===RUN:=== or ===BACKGROUND:=== commands
+    commands_run = _apply_run_commands(response, project_dir)
+
+    # Display the text response (strip file and command blocks from display)
     display_text = response
-    if files_written > 0:
+    if files_written > 0 or commands_run > 0:
         display_text = re.sub(
             r"===FILE:.*?===END===", "", response, flags=re.DOTALL
         ).strip()
-        _log("APPLIED", f"Updated {files_written} file(s)")
+        display_text = re.sub(
+            r"===(RUN|BACKGROUND):\s*.+?===", "", display_text, flags=re.IGNORECASE
+        ).strip()
+        if files_written > 0:
+            _log("APPLIED", f"Updated {files_written} file(s)")
+        if commands_run > 0:
+            _log("APPLIED", f"Executed {commands_run} command(s)")
 
     if display_text:
         console.print()
@@ -927,6 +949,84 @@ def _apply_file_changes(response: str, project_dir: Path, ctx: ContextManager) -
             files_written += 1
 
     return files_written
+
+
+def _apply_run_commands(response: str, project_dir: Path) -> int:
+    """
+    Parse ===RUN: command=== and ===BACKGROUND: command=== blocks and execute them.
+    Returns count of commands executed.
+
+    ===RUN: command=== — runs synchronously, waits for completion
+    ===BACKGROUND: command=== — runs in background (for servers/watchers)
+    """
+    commands_run = 0
+
+    # Find all ===RUN:=== and ===BACKGROUND:=== blocks in order
+    pattern = re.compile(r"===(RUN|BACKGROUND):\s*(.+?)\s*===", re.IGNORECASE)
+    matches = list(pattern.finditer(response))
+
+    if not matches:
+        return 0
+
+    _log("EXEC", f"Running {len(matches)} command(s)")
+
+    for m in matches:
+        cmd_type = m.group(1).upper()
+        cmd = m.group(2).strip()
+
+        if not cmd:
+            continue
+
+        # Safety: skip obviously dangerous commands
+        dangerous = ("rm -rf /", "rm -rf ~", "sudo rm", ":(){", "mkfs", "dd if=")
+        if any(d in cmd.lower() for d in dangerous):
+            _log("EXEC", f"  ⚠ Skipped dangerous command: {cmd}")
+            continue
+
+        if cmd_type == "BACKGROUND":
+            _log("EXEC", f"  ⚡ [background] {cmd}")
+            try:
+                subprocess.Popen(
+                    cmd,
+                    shell=True,
+                    cwd=project_dir,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    start_new_session=True,
+                )
+                commands_run += 1
+                console.print(f"           [dim]started in background[/dim]")
+            except Exception as e:
+                _log("EXEC", f"  ✗ Failed: {e}")
+        else:
+            _log("EXEC", f"  ▶ {cmd}")
+            try:
+                result = subprocess.run(
+                    cmd,
+                    shell=True,
+                    cwd=project_dir,
+                    capture_output=True,
+                    text=True,
+                    timeout=120,
+                )
+                commands_run += 1
+                if result.stdout.strip():
+                    # Show first 20 lines of output
+                    lines = result.stdout.strip().split("\n")
+                    for line in lines[:20]:
+                        console.print(f"           [dim]{line}[/dim]")
+                    if len(lines) > 20:
+                        console.print(f"           [dim]... ({len(lines) - 20} more lines)[/dim]")
+                if result.returncode != 0:
+                    err = result.stderr.strip()[:500] if result.stderr else ""
+                    if err:
+                        _log("EXEC", f"  ⚠ exit {result.returncode}: {err[:200]}")
+            except subprocess.TimeoutExpired:
+                _log("EXEC", f"  ⚠ Timed out (120s): {cmd}")
+            except Exception as e:
+                _log("EXEC", f"  ✗ Failed: {e}")
+
+    return commands_run
 
 
 # ═══════════════════════════════════════════════════════════════════

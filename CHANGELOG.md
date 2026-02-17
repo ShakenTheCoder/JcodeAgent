@@ -1,5 +1,40 @@
 # Changelog
 
+## v0.9.2 — Autonomous Execution
+
+Critical fix: agent mode now actually executes commands and builds projects end-to-end instead of just printing instructions.
+
+### Intent Classification Fix
+- Added `_BUILD_PATTERNS` — "i want you to build an app", "create a website", "make me a dashboard" now correctly classify as BUILD (previously fell through to CHAT)
+- BUILD patterns score 1.5× and always win over CHAT in tie-breaking
+- Added RUN patterns: "get the project running", "auto run", "run the commands", "install and run"
+- "i want you to build an app that shows weather info" now triggers the full build pipeline instead of a chat response
+
+### Agent Mode Routes All Input to Agentic Handler
+- In agent mode, CHAT-classified input now routes to `_cmd_agentic()` instead of `_cmd_chat()`
+- This means ANY request in agent mode gets autonomous file creation + command execution
+- Chat mode still uses `_cmd_chat()` for conversational responses
+
+### Command Execution (`===RUN:===` / `===BACKGROUND:===`)
+- New `_apply_run_commands()` function parses and executes shell commands from model output
+- `===RUN: command===` — synchronous execution with output display (120s timeout)
+- `===BACKGROUND: command===` — background processes for servers/watchers
+- Safety filter blocks dangerous commands (rm -rf /, sudo rm, mkfs, dd, fork bombs)
+- Output capped at 20 lines per command for clean display
+- Wired into both `_cmd_agentic()` and `_cmd_chat()` — files applied before commands run
+
+### Updated Prompts
+- `AGENTIC_SYSTEM`: now instructs model to emit `===RUN:===` blocks for package installation, project setup, and server startup — never tell user to run manually
+- `AGENTIC_TASK`: changed "Modification Request" to "Request", added autonomous mode instructions
+- `CHAT_SYSTEM` MODE 3: updated to emit `===RUN:===` blocks instead of showing commands to copy-paste
+
+### Files Changed
+- `jcode/intent.py` — Added `_BUILD_PATTERNS`, expanded `_RUN_PATTERNS`, BUILD always wins over CHAT
+- `jcode/cli.py` — CHAT→agentic routing in agent mode, `_apply_run_commands()`, command block stripping in display
+- `jcode/prompts.py` — `===RUN:===`/`===BACKGROUND:===` format in AGENTIC_SYSTEM, CHAT_SYSTEM, AGENTIC_TASK
+
+---
+
 ## v0.9.1 — Spec Contracts, RAG Memory & Structured Errors
 
 Implements the frontier-grade coding agent blueprint: planner outputs formal specs, coder enforces them as contracts, embedding-based RAG memory provides cross-file context, and structured error parsing enables smarter fix loops.
