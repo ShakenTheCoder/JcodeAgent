@@ -295,11 +295,19 @@ def refresh_local_models() -> set[str]:
 def _is_model_local(model: str) -> bool:
     """Check if a model is installed locally."""
     local = _get_local_models()
+    
+    # Exact match (with or without :latest normalization)
     if model in local:
         return True
-    # Try base name without tag
-    base = model.split(":")[0]
-    return any(m.startswith(base) for m in local)
+    
+    # Normalize :latest — "model" and "model:latest" are the same
+    model_normalized = model if ":" in model else f"{model}:latest"
+    model_without_latest = model.replace(":latest", "") if model.endswith(":latest") else model
+    
+    if model_normalized in local or model_without_latest in local:
+        return True
+    
+    return False
 
 
 def _find_best_model(

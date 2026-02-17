@@ -1,5 +1,20 @@
 # Changelog
 
+## v0.9.5 — Model Fallback Fix
+
+Critical bugfix: `_is_model_local()` incorrectly matched different quantizations of the same base model. When requesting `deepseek-r1:70b` (not installed), it returned True because `deepseek-r1:14b` was installed, causing `model 'deepseek-r1:70b' not found (status code: 404)` errors.
+
+### Model Resolution Fix
+- `_is_model_local()` now requires EXACT name match (including quantization tag)
+- Previously: `"deepseek-r1:70b"` matched `"deepseek-r1:14b"` via `startswith()` check on base name
+- Now: Only matches if full name is in local models (handles `:latest` normalization correctly)
+- Fallback now works correctly: `heavy/large` planner requests `reasoning/large` → no exact match → falls back to `deepseek-r1:14b` (reasoning/medium)
+
+### Files Changed
+- `jcode/config.py` — Fixed `_is_model_local()` to match full model names, not base prefixes
+
+---
+
 ## v0.9.4 — Smart Classification (LLM + Semantic Signals)
 
 Critical fix: "build a tinder for linkedin" was classified as `simple/small` → now correctly classified as `heavy/large`. Short prompts describing complex apps no longer fall through to the default.
