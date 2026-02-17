@@ -2,6 +2,7 @@
 JCode configuration — models, roles, paths, defaults.
 
 v0.3.0 — Smart Model Tiering + Parallel DAG execution.
+v0.7.0 — CWD-aware operation + git integration.
 """
 
 from pathlib import Path
@@ -155,7 +156,7 @@ MAX_TASK_FAILURES = 8         # Per task before escalation — generous retry bu
 MAX_DIFF_LINES = 80           # Prefer patches under this
 
 # ── Project Defaults ───────────────────────────────────────────────
-DEFAULT_OUTPUT_DIR = Path.cwd() / "jcode_output"
+DEFAULT_OUTPUT_DIR = Path.cwd()  # v0.7.0: CWD-aware by default
 
 
 # ── Task State Machine ─────────────────────────────────────────────

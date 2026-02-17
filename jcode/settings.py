@@ -1,6 +1,8 @@
 """
 User settings and persistent configuration.
 Stored in ~/.jcode/settings.json
+
+v0.7.0 — Added git settings, CWD mode, agentic/chat mode preferences.
 """
 
 from __future__ import annotations
@@ -18,10 +20,21 @@ class UserSettings:
     last_project: str = ""
     autonomous_access: bool | None = None   # None = never asked
     internet_access: bool | None = None     # None = never asked
-    
+
+    # v0.7.0 — Git integration
+    git_auto_commit: bool = True            # Auto-commit after builds/modifications
+    git_auto_push: bool = False             # Auto-push after commits (needs remote)
+    git_default_remote: str = "origin"
+
+    # v0.7.0 — Mode preference
+    default_mode: str = "agentic"           # "agentic" or "chat"
+
+    # v0.7.0 — CWD mode (operate in current directory)
+    cwd_mode: bool = True                   # Use CWD instead of ~/jcode_projects
+
     def to_dict(self) -> dict:
         return asdict(self)
-    
+
     @classmethod
     def from_dict(cls, data: dict) -> UserSettings:
         # Filter to known fields only for forward-compat
