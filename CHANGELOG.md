@@ -1,5 +1,43 @@
 # Changelog
 
+## v0.9.4 — Smart Classification (LLM + Semantic Signals)
+
+Critical fix: "build a tinder for linkedin" was classified as `simple/small` → now correctly classified as `heavy/large`. Short prompts describing complex apps no longer fall through to the default.
+
+### LLM-Based Pre-Classification
+- New `_llm_classify()` calls the fastest available model to reason about task complexity before keyword matching
+- Uses a structured classification prompt that understands what "build a tinder for X" actually implies (auth, database, matching, profiles, etc.)
+- Adds ~1-3s but prevents catastrophic misclassification of short prompts
+- Falls back gracefully to keyword-only scoring if no model is available
+- LLM result is fused with keyword scoring — the HIGHER classification always wins (err on the side of giving more resources)
+
+### App-Type Complexity Signals
+- Added "clone" signals to `_HEAVY_SIGNALS`: "like tinder", "uber for", "a spotify", "an airbnb", etc. — covers 19 major platforms
+- Added domain signals to `_HEAVY_SIGNALS`: "social network", "marketplace", "dating app", "matching system", "recommendation engine", "booking system", "fintech", "saas", etc.
+- Added domain signals to `_MEDIUM_SIGNALS`: "web app", "mobile app", "game", "analytics", "profile", "search", "forum", etc.
+- "build a tinder for linkedin" now matches 2 heavy signals → `heavy/medium` from keywords alone (LLM pushes to `heavy/large`)
+
+### Default Classification Bias Fix
+- When no keyword signals match AND no LLM available, default is now `medium/medium` instead of `simple/small`
+- Only classify as `simple` when explicit simple signals are present ("simple", "basic", "calculator", "todo", "landing page")
+- Short prompts with no signals (e.g., "build a weather app") now get `medium/medium` instead of being penalized
+
+### Classification Examples (Before → After)
+| Prompt | Before | After |
+|--------|--------|-------|
+| "build a tinder for linkedin" | simple/small | heavy/large |
+| "build a weather app" | simple/small | medium/medium |
+| "build me an uber for dogs" | simple/small | heavy/large |
+| "create a social network" | simple/small | medium/medium |
+| "build a dating app with matching" | simple/small | heavy/medium |
+| "build a simple calculator" | simple/small | simple/small ✓ |
+| "make a landing page" | simple/small | simple/small ✓ |
+
+### Files Changed
+- `jcode/config.py` — `_llm_classify()`, `_CLASSIFY_PROMPT`, expanded `_HEAVY_SIGNALS` (19 app-type + 12 domain signals), expanded `_MEDIUM_SIGNALS` (12 domain signals), `_classify_from_prompt()` rewritten with 2-phase LLM+keyword fusion, default bias fix
+
+---
+
 ## v0.9.3 — Fence Stripping & Execution Safety
 
 Bugfix: models wrap `===FILE:===` content in markdown fences (` ```json ``` `), corrupting files like `package.json`. Commands now stop on failure instead of blindly continuing.

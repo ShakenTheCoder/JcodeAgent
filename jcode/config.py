@@ -27,6 +27,8 @@ Model Registry (2025/2026 Ollama ecosystem):
 
 from __future__ import annotations
 
+import json
+import re
 from pathlib import Path
 from dataclasses import dataclass, field
 from enum import Enum
@@ -651,6 +653,22 @@ _HEAVY_SIGNALS = [
     "machine learning", "neural", "tensorflow", "pytorch", "ai model",
     "payment", "stripe", "billing", "subscription",
     "multi-tenant", "rbac", "permission", "role-based",
+    # App-type signals — short prompts that imply complex full-stack apps
+    "like tinder", "like uber", "like airbnb", "like twitter", "like instagram",
+    "like spotify", "like slack", "like discord", "like shopify", "like amazon",
+    "like linkedin", "like facebook", "like reddit", "like youtube", "like tiktok",
+    "like whatsapp", "like netflix", "like doordash", "like lyft",
+    "tinder for", "uber for", "airbnb for", "twitter for", "instagram for",
+    "spotify for", "slack for", "discord for", "shopify for",
+    "a tinder", "an uber", "an airbnb", "a twitter", "an instagram",
+    "a spotify", "a slack", "a discord", "a shopify",
+    # Domain signals — imply complex architecture
+    "social network", "social media", "marketplace", "e-commerce", "ecommerce",
+    "dating app", "matching system", "recommendation engine",
+    "real-time chat", "messaging app", "live stream",
+    "booking system", "reservation", "scheduling platform",
+    "fintech", "banking", "trading platform", "crypto",
+    "saas", "multi-user", "collaboration tool",
 ]
 
 _MEDIUM_SIGNALS = [
@@ -661,6 +679,13 @@ _MEDIUM_SIGNALS = [
     "upload", "file system", "storage",
     "email", "notification", "queue",
     "testing", "test suite", "e2e",
+    # Domain signals — imply moderate complexity
+    "web app", "webapp", "mobile app", "desktop app",
+    "portfolio", "blog with", "forum", "wiki",
+    "game", "multiplayer", "leaderboard",
+    "search", "filter", "pagination",
+    "profile", "user profile", "account",
+    "analytics", "tracking", "metrics",
 ]
 
 _SIMPLE_SIGNALS = [
@@ -684,35 +709,148 @@ def classify_task(prompt: str | None = None, plan: dict | None = None) -> TaskCl
     return TaskClassification(Complexity.SIMPLE, Size.SMALL, skip_review=True, skip_research=True)
 
 
+# ── LLM-based pre-classification ──────────────────────────────────
+
+_CLASSIFY_PROMPT = """\
+You are a task classifier for a coding agent. Given a user's build request, \
+classify the task's COMPLEXITY and SIZE.
+
+COMPLEXITY:
+- simple: trivial scripts, hello world, calculators, static pages, single-file utilities
+- medium: CRUD apps, REST APIs, dashboards, single-framework frontends, CLI tools with multiple commands
+- heavy: full-stack apps with auth/database/real-time, social networks, marketplaces, \
+apps that clone major platforms (tinder, uber, airbnb, etc.), microservices, ML pipelines
+
+SIZE:
+- small: 1-4 files, can be done quickly
+- medium: 5-14 files, moderate scope
+- large: 15+ files, extensive scope
+
+IMPORTANT: When someone says "build a tinder for X" or "build an uber for Y", \
+that implies a FULL application with matching/swiping/profiles/auth/database — \
+that is ALWAYS heavy/large.
+
+Respond with ONLY a JSON object, no other text:
+{"complexity": "simple|medium|heavy", "size": "small|medium|large"}
+"""
+
+
+def _llm_classify(prompt: str) -> tuple[Complexity, Size] | None:
+    """Use the fastest available model to classify task complexity.
+
+    Returns (Complexity, Size) or None if LLM classification fails/unavailable.
+    This adds ~1-3s but prevents catastrophic misclassification of short prompts
+    like "build a tinder for linkedin" → simple/small.
+    """
+    try:
+        # Use the fastest available model for classification
+        model = _find_best_model("fast", "small")
+        if not model:
+            model = _find_best_model("coding", "small")
+        if not model:
+            # Try any available model
+            local = _get_local_models()
+            if local:
+                model = next(iter(local))
+            else:
+                return None
+
+        import ollama as _ollama
+        resp = _ollama.chat(
+            model=model,
+            messages=[
+                {"role": "system", "content": _CLASSIFY_PROMPT},
+                {"role": "user", "content": prompt},
+            ],
+            options={"temperature": 0.0, "num_ctx": 1024, "num_predict": 80},
+        )
+        text = resp["message"]["content"].strip()
+
+        # Strip <think> blocks from reasoning models
+        text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+
+        # Extract JSON from response (model might wrap in ```json ... ```)
+        json_match = re.search(r'\{[^}]+\}', text)
+        if not json_match:
+            return None
+        data = json.loads(json_match.group())
+
+        complexity_str = data.get("complexity", "").lower()
+        size_str = data.get("size", "").lower()
+
+        complexity_map = {"simple": Complexity.SIMPLE, "medium": Complexity.MEDIUM, "heavy": Complexity.HEAVY}
+        size_map = {"small": Size.SMALL, "medium": Size.MEDIUM, "large": Size.LARGE}
+
+        c = complexity_map.get(complexity_str)
+        s = size_map.get(size_str)
+        if c and s:
+            return (c, s)
+        return None
+    except Exception:
+        return None
+
+
 def _classify_from_prompt(prompt: str) -> TaskClassification:
-    """Classify from user prompt (before planning)."""
+    """Classify from user prompt (before planning).
+
+    Uses a 2-phase approach:
+    1. LLM reasoning (fast model) — understands semantic meaning
+    2. Keyword scoring — validates and can override LLM
+    Falls back to keyword-only if LLM unavailable.
+    """
     lower = prompt.lower()
     heavy_score = sum(1 for kw in _HEAVY_SIGNALS if kw in lower)
     medium_score = sum(1 for kw in _MEDIUM_SIGNALS if kw in lower)
     simple_score = sum(1 for kw in _SIMPLE_SIGNALS if kw in lower)
 
-    # Determine complexity
-    if heavy_score >= 2 or (heavy_score >= 1 and medium_score >= 2):
-        complexity = Complexity.HEAVY
-    elif medium_score >= 2 or heavy_score >= 1:
-        complexity = Complexity.MEDIUM
-    elif simple_score > 0 and heavy_score == 0 and medium_score == 0:
-        complexity = Complexity.SIMPLE
-    else:
-        # Default: heuristic based on prompt length
-        if len(prompt.split()) > 50:
-            complexity = Complexity.MEDIUM
-        else:
-            complexity = Complexity.SIMPLE
+    # Phase 1: Try LLM classification (semantic understanding)
+    llm_result = _llm_classify(prompt)
 
-    # Estimate size from prompt (rough — will be refined after planning)
-    word_count = len(prompt.split())
-    if word_count > 80 or "full" in lower or "complete" in lower or "entire" in lower:
-        size = Size.LARGE
-    elif word_count > 30 or complexity == Complexity.HEAVY:
-        size = Size.MEDIUM
+    # Phase 2: Keyword scoring + LLM fusion
+    if llm_result:
+        llm_complexity, llm_size = llm_result
+
+        # If keywords strongly disagree with LLM, use the HIGHER classification
+        # (err on the side of giving the task more resources)
+        if heavy_score >= 2 or (heavy_score >= 1 and medium_score >= 2):
+            kw_complexity = Complexity.HEAVY
+        elif medium_score >= 2 or heavy_score >= 1:
+            kw_complexity = Complexity.MEDIUM
+        elif simple_score > 0 and heavy_score == 0 and medium_score == 0:
+            kw_complexity = Complexity.SIMPLE
+        else:
+            kw_complexity = None  # No keyword opinion
+
+        # Take the higher of LLM vs keyword complexity
+        complexity_order = {Complexity.SIMPLE: 0, Complexity.MEDIUM: 1, Complexity.HEAVY: 2}
+        if kw_complexity is not None:
+            complexity = max(llm_complexity, kw_complexity, key=lambda c: complexity_order[c])
+        else:
+            complexity = llm_complexity
+
+        size = llm_size
     else:
-        size = Size.SMALL
+        # LLM unavailable — pure keyword scoring (improved defaults)
+        if heavy_score >= 2 or (heavy_score >= 1 and medium_score >= 2):
+            complexity = Complexity.HEAVY
+        elif medium_score >= 2 or heavy_score >= 1:
+            complexity = Complexity.MEDIUM
+        elif simple_score > 0 and heavy_score == 0 and medium_score == 0:
+            complexity = Complexity.SIMPLE
+        else:
+            # Default: MEDIUM (not SIMPLE) — err on the side of caution
+            # Only classify as SIMPLE when explicit simple signals are present
+            complexity = Complexity.MEDIUM
+
+        # Estimate size from prompt (rough — will be refined after planning)
+        word_count = len(prompt.split())
+        if word_count > 80 or "full" in lower or "complete" in lower or "entire" in lower:
+            size = Size.LARGE
+        elif word_count > 30 or complexity == Complexity.HEAVY:
+            size = Size.MEDIUM
+        else:
+            # Default to MEDIUM for ambiguous prompts (not SMALL)
+            size = Size.MEDIUM if complexity != Complexity.SIMPLE else Size.SMALL
 
     return TaskClassification(
         complexity=complexity,
