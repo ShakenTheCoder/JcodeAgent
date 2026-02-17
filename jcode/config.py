@@ -1,7 +1,7 @@
 """
 JCode configuration — models, roles, paths, defaults.
 
-v0.2.0 — Multi-role architecture with structured memory & DAG tasks.
+v0.3.0 — Smart Model Tiering + Parallel DAG execution.
 """
 
 from pathlib import Path
@@ -9,11 +9,101 @@ from dataclasses import dataclass, field
 from enum import Enum
 
 
-# ── Model Configuration ────────────────────────────────────────────
-PLANNER_MODEL = "deepseek-r1:14b"
-CODER_MODEL = "qwen2.5-coder:14b"
-REVIEWER_MODEL = "qwen2.5-coder:14b"      # Same weights, different prompt
-ANALYZER_MODEL = "deepseek-r1:14b"         # Same weights, different prompt
+# ═══════════════════════════════════════════════════════════════════
+# Smart Model Tiering
+# ═══════════════════════════════════════════════════════════════════
+#
+# Models are organized into 3 tiers:
+#   FAST   — small, low-latency (planning, lint-style review)
+#   MEDIUM — balanced (analysis, standard review)
+#   STRONG — largest, highest quality (code generation)
+#
+# Each role picks a tier based on project complexity:
+#
+#   Complexity  │ Planner │ Coder  │ Reviewer │ Analyzer
+#   ────────────┼─────────┼────────┼──────────┼─────────
+#   simple      │ fast    │ medium │ fast     │ fast
+#   medium      │ medium  │ strong │ medium   │ medium
+#   complex     │ strong  │ strong │ medium   │ strong
+#   large       │ strong  │ strong │ strong   │ strong
+# ═══════════════════════════════════════════════════════════════════
+
+# ── Model Tiers ────────────────────────────────────────────────────
+MODEL_TIERS = {
+    "fast": {
+        "reasoning": "deepseek-r1:7b",
+        "coding":    "qwen2.5-coder:7b",
+    },
+    "medium": {
+        "reasoning": "deepseek-r1:14b",
+        "coding":    "qwen2.5-coder:14b",
+    },
+    "strong": {
+        "reasoning": "deepseek-r1:32b",
+        "coding":    "qwen2.5-coder:32b",
+    },
+}
+
+# Which family each role uses
+ROLE_FAMILY = {
+    "planner":  "reasoning",
+    "coder":    "coding",
+    "reviewer": "coding",
+    "analyzer": "reasoning",
+}
+
+# Complexity → tier mapping per role
+ROLE_TIER_MAP = {
+    "simple": {
+        "planner":  "fast",
+        "coder":    "medium",
+        "reviewer": "fast",
+        "analyzer": "fast",
+    },
+    "medium": {
+        "planner":  "medium",
+        "coder":    "strong",
+        "reviewer": "medium",
+        "analyzer": "medium",
+    },
+    "complex": {
+        "planner":  "strong",
+        "coder":    "strong",
+        "reviewer": "medium",
+        "analyzer": "strong",
+    },
+    "large": {
+        "planner":  "strong",
+        "coder":    "strong",
+        "reviewer": "strong",
+        "analyzer": "strong",
+    },
+}
+
+
+def get_model_for_role(role: str, complexity: str = "medium") -> str:
+    """Resolve the concrete model name for a role at a given complexity."""
+    tier = ROLE_TIER_MAP.get(complexity, ROLE_TIER_MAP["medium"]).get(role, "medium")
+    family = ROLE_FAMILY.get(role, "coding")
+    return MODEL_TIERS[tier][family]
+
+
+def get_all_required_models(complexity: str = "medium") -> list[str]:
+    """Return the unique set of models needed for a given complexity level."""
+    models = set()
+    tier_map = ROLE_TIER_MAP.get(complexity, ROLE_TIER_MAP["medium"])
+    for role, tier in tier_map.items():
+        family = ROLE_FAMILY[role]
+        models.add(MODEL_TIERS[tier][family])
+    return sorted(models)
+
+
+# ── Legacy constants (kept for backward compat, resolved dynamically) ──
+PLANNER_MODEL = MODEL_TIERS["medium"]["reasoning"]
+CODER_MODEL = MODEL_TIERS["medium"]["coding"]
+REVIEWER_MODEL = MODEL_TIERS["medium"]["coding"]
+ANALYZER_MODEL = MODEL_TIERS["medium"]["reasoning"]
+
 
 # ── Generation Parameters ──────────────────────────────────────────
 BASE_PLANNER_CTX = 16384
@@ -50,6 +140,13 @@ COMPLEXITY_SCALING = {
     "complex": 2.0,     # 32k
     "large": 2.5,       # 40k
 }
+
+# ── Worker Pool Settings ───────────────────────────────────────────
+MAX_WORKERS = 6               # Maximum concurrent workers
+MIN_WORKERS = 1               # Minimum concurrent workers
+CPU_HIGH_THRESHOLD = 85.0     # Reduce concurrency above this %
+CPU_LOW_THRESHOLD = 50.0      # Increase concurrency below this %
+WORKER_POLL_INTERVAL = 2.0    # Seconds between CPU checks
 
 # ── Limits ─────────────────────────────────────────────────────────
 MAX_ITERATIONS = 15

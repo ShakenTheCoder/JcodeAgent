@@ -1,6 +1,8 @@
 """
 Reviewer module — code critic that catches bugs BEFORE execution.
 
+v2.0 — Supports parallel review via silent mode for WorkerPool.
+
 This is one of the key differentiators: frontier models generate and hope.
 JCode generates, reviews, THEN executes. Verification > intelligence.
 """
@@ -12,7 +14,7 @@ import re
 
 from rich.console import Console
 
-from jcode.ollama_client import call_reviewer
+from jcode.ollama_client import call_reviewer, call_model_silent
 from jcode.prompts import REVIEWER_SYSTEM, REVIEWER_TASK
 from jcode.context import ContextManager
 
@@ -45,9 +47,14 @@ def _extract_json(text: str) -> dict:
     return {"approved": True, "issues": [], "summary": "Could not parse review"}
 
 
-def review_file(file_path: str, ctx: ContextManager) -> dict:
+def review_file(file_path: str, ctx: ContextManager, parallel: bool = False) -> dict:
     """
     Review a generated file before accepting it.
+
+    Args:
+        file_path: Relative path to the file in the project.
+        ctx: ContextManager for structured memory.
+        parallel: If True, use silent mode (thread-safe, no streaming).
 
     Returns:
         {
@@ -68,9 +75,6 @@ def review_file(file_path: str, ctx: ContextManager) -> dict:
     related_paths.extend(deps)
     related_context = ctx.get_file_context(related_paths[:3]) if related_paths else "(none)"
 
-    ctx.reset_channel("reviewer")
-    ctx.add_message("reviewer", "system", REVIEWER_SYSTEM)
-
     prompt = REVIEWER_TASK.format(
         architecture=ctx.get_architecture(),
         file_path=file_path,
@@ -78,16 +82,29 @@ def review_file(file_path: str, ctx: ContextManager) -> dict:
         file_content=file_content[:MAX_REVIEW_CHARS],
         related_context=related_context,
     )
-    ctx.add_message("reviewer", "user", prompt)
-
-    console.print(f"  [dim]Reviewing[/dim] [cyan]{file_path}[/cyan]")
 
     _, coder_ctx = ctx.get_context_sizes()
-    raw = call_reviewer(
-        ctx.get_messages("reviewer"),
-        stream=False,  # Reviews don't need streaming
-        num_ctx=coder_ctx,
-    )
+    complexity = ctx.get_complexity()
+
+    if parallel:
+        # Thread-safe silent mode — build messages locally
+        messages = [
+            {"role": "system", "content": REVIEWER_SYSTEM},
+            {"role": "user", "content": prompt},
+        ]
+        console.print(f"  [dim]⚡ Reviewing[/dim] [cyan]{file_path}[/cyan]")
+        raw = call_model_silent("reviewer", messages, num_ctx=coder_ctx, complexity=complexity)
+    else:
+        ctx.reset_channel("reviewer")
+        ctx.add_message("reviewer", "system", REVIEWER_SYSTEM)
+        ctx.add_message("reviewer", "user", prompt)
+        console.print(f"  [dim]Reviewing[/dim] [cyan]{file_path}[/cyan]")
+        raw = call_reviewer(
+            ctx.get_messages("reviewer"),
+            stream=False,  # Reviews don't need streaming
+            num_ctx=coder_ctx,
+            complexity=complexity,
+        )
 
     result = _extract_json(raw)
 

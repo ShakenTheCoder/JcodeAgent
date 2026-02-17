@@ -35,12 +35,12 @@ from prompt_toolkit import prompt as pt_prompt
 from prompt_toolkit.history import InMemoryHistory
 
 from jcode import __version__
-from jcode.config import ProjectState, detect_complexity
+from jcode.config import ProjectState, detect_complexity, get_model_for_role, get_all_required_models
 from jcode.context import ContextManager
 from jcode.planner import create_plan
 from jcode.iteration import execute_plan
 from jcode.file_manager import print_tree
-from jcode.ollama_client import check_ollama_running, call_model
+from jcode.ollama_client import check_ollama_running, call_model, ensure_models_for_complexity
 from jcode.settings import SettingsManager
 from jcode.executor import set_autonomous
 from jcode.web import set_internet_access, web_search, fetch_page, search_and_summarize
@@ -206,10 +206,11 @@ def main():
         console.print("  [dim]Ollama is not running.[/dim]")
         console.print("  [dim]Start it with:[/dim]  [cyan]ollama serve[/cyan]")
         console.print(
-            "  [dim]Then pull models:[/dim]  [cyan]ollama pull deepseek-r1:14b && ollama pull qwen2.5-coder:14b[/cyan]",
+            "  [dim]Then pull models:[/dim]  [cyan]ollama pull deepseek-r1:7b && ollama pull qwen2.5-coder:7b[/cyan]",
         )
         sys.exit(1)
     console.print("  [cyan]Ollama connected[/cyan]")
+    console.print("  [dim]Smart model tiering enabled — models auto-selected by complexity[/dim]")
 
     # -- Projects dir
     projects_dir = settings_mgr.get_default_output_dir()
@@ -435,6 +436,17 @@ def _cmd_build(
 
     complexity = detect_complexity(prompt)
     console.print(f"  [dim]Complexity:[/dim] {complexity}")
+
+    # Show model tier assignment
+    console.print(f"  [dim]Models:[/dim]")
+    console.print(f"    [dim]Planner:[/dim]  [cyan]{get_model_for_role('planner', complexity)}[/cyan]")
+    console.print(f"    [dim]Coder:[/dim]    [cyan]{get_model_for_role('coder', complexity)}[/cyan]")
+    console.print(f"    [dim]Reviewer:[/dim] [cyan]{get_model_for_role('reviewer', complexity)}[/cyan]")
+    console.print(f"    [dim]Analyzer:[/dim] [cyan]{get_model_for_role('analyzer', complexity)}[/cyan]")
+
+    # Pre-pull all required models for this complexity
+    _log("MODELS", f"Ensuring models for '{complexity}' complexity...")
+    ensure_models_for_complexity(complexity)
 
     state = ProjectState(
         name=slug,

@@ -4,11 +4,14 @@ organized, sliced knowledge about the project.
 
 This is what lets a 14B model compete with 200k-context frontier models.
 Instead of "dump everything", we inject only what's relevant.
+
+v2.0 — Thread-safe file recording for parallel generation.
 """
 
 from __future__ import annotations
 
 import json
+import threading
 from pathlib import Path
 from datetime import datetime
 
@@ -16,6 +19,9 @@ from jcode.config import (
     ProjectState, TaskNode, TaskStatus,
     MAX_FILE_READ_CHARS, detect_complexity, get_context_size,
 )
+
+# Thread lock for state mutations (file recording, failure logging)
+_state_lock = threading.Lock()
 
 
 class ContextManager:
@@ -29,6 +35,11 @@ class ContextManager:
     4. Task DAG — ordered tasks with status
     5. Failure log — what broke and how it was fixed
     6. Conversation history per role (planner, coder)
+
+    Thread-safety:
+    - record_file() and record_failure() are thread-safe
+    - Per-file memory isolation: each file's content is independent
+    - Global summary memory: architecture + file_index are read-only during generation
     """
 
     def __init__(self, state: ProjectState | None = None) -> None:
@@ -132,11 +143,13 @@ class ContextManager:
         return self.get_file_context(deps)
 
     def record_file(self, rel_path: str, content: str) -> None:
-        self.state.files[rel_path] = content
-        self.state.last_modified = datetime.now().isoformat()
+        """Thread-safe: record a generated file's content."""
+        with _state_lock:
+            self.state.files[rel_path] = content
+            self.state.last_modified = datetime.now().isoformat()
 
     def record_failure(self, file_path: str, error: str, fix: str, iteration: int) -> None:
-        """Log a failure for the structured failure memory."""
+        """Thread-safe: log a failure for the structured failure memory."""
         entry = {
             "file": file_path,
             "error": error[:500],
@@ -144,7 +157,8 @@ class ContextManager:
             "iteration": iteration,
             "timestamp": datetime.now().isoformat(),
         }
-        self.state.failure_log.append(entry)
+        with _state_lock:
+            self.state.failure_log.append(entry)
 
     def get_failure_log_str(self, file_path: str | None = None) -> str:
         """Get formatted failure log, optionally filtered by file."""

@@ -87,10 +87,12 @@ def analyze_error(
     console.print(f"  [dim]Analyzing error in[/dim] [cyan]{file_path}[/cyan]")
 
     planner_ctx, _ = ctx.get_context_sizes()
+    complexity = ctx.get_complexity()
     raw = call_analyzer(
         ctx.get_messages("analyzer"),
         stream=False,  # Analysis doesn't need streaming
         num_ctx=planner_ctx,
+        complexity=complexity,
     )
 
     result = _extract_json(raw)

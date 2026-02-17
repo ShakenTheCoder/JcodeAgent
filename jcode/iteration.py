@@ -1,25 +1,28 @@
 """
-Iteration engine v4.0 — Resilient DAG-based task execution.
+Iteration engine v5.0 — Parallel DAG-based task execution.
 
-Pipeline per task:
-  1. GENERATE   -> Coder produces the file
-  2. REVIEW     -> Reviewer critiques it (with re-review loop)
-  3. VERIFY     -> Static analysis + syntax + lint
-  4. FIX LOOP   -> Multi-strategy repair with 8 attempts:
-       a. Targeted patch (first 3 attempts — cheapest)
-       b. Deep re-analysis with cross-file context (attempts 4-5)
-       c. Full regeneration from scratch with error history (attempt 6)
-       d. Simplified/minimal version (attempt 7)
-       e. Research-based fix — analyze error patterns (attempt 8)
-  5. ESCALATE   -> If ALL strategies fail, user chooses next step
+Architecture:
+  1. Compute execution waves from the task DAG
+  2. For each wave, run ALL tasks in parallel via WorkerPool
+  3. Each task pipeline: GENERATE → REVIEW → VERIFY → FIX
+  4. Within a wave, generate all in parallel, review all in parallel
+  5. Fix only failures (sequentially per task, with escalation)
 
-Philosophy: the user should receive working code. We exhaust every
-strategy before giving up. 8 attempts with 5 different strategies
-means the agent genuinely tries to solve the problem.
+Pipeline per wave:
+  Phase A: Generate all files in the wave concurrently
+  Phase B: Review all generated files concurrently
+  Phase C: Verify all files (static analysis)
+  Phase D: Fix only failures (multi-strategy, sequential)
+
+Worker Pool:
+  - Max 6 concurrent workers
+  - CPU-aware adaptive concurrency
+  - Thread-safe model calls via silent mode
 """
 
 from __future__ import annotations
 
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -28,7 +31,7 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.prompt import Prompt
 
-from jcode.config import MAX_ITERATIONS, MAX_TASK_FAILURES, TaskStatus
+from jcode.config import MAX_ITERATIONS, MAX_TASK_FAILURES, TaskStatus, get_model_for_role
 from jcode.context import ContextManager
 from jcode.coder import generate_file, patch_file
 from jcode.reviewer import review_file
@@ -36,6 +39,8 @@ from jcode.analyzer import analyze_error
 from jcode.planner import refine_plan
 from jcode.file_manager import ensure_project_dir, write_file, print_tree
 from jcode.executor import verify_file, install_dependencies, shell_exec, run_tests
+from jcode.worker_pool import WorkerPool
+from jcode.task_graph import compute_waves, get_ready_wave, get_dag_stats
 
 console = Console()
 
@@ -48,8 +53,15 @@ def _log(tag: str, message: str) -> None:
 
 def execute_plan(ctx: ContextManager, output_dir: Path) -> bool:
     """
-    Execute the full plan using DAG-ordered task processing.
-    Each task goes through: generate > review > verify > fix loop.
+    Execute the full plan using parallel wave-based DAG processing.
+
+    Strategy:
+      1. Compute waves (topological layers of the DAG)
+      2. For each wave:
+         a. Generate ALL files in parallel
+         b. Review ALL files in parallel
+         c. Verify ALL files
+         d. Fix only failures (sequentially)
     """
     ctx.state.output_dir = output_dir
     ensure_project_dir(output_dir)
@@ -64,33 +76,84 @@ def execute_plan(ctx: ContextManager, output_dir: Path) -> bool:
         _log("ERROR", "Plan has no tasks")
         return False
 
-    _log("ENGINE", f"Executing {len(dag)} task(s) via DAG pipeline")
-    _log("ENGINE", "Pipeline: Generate > Review > Verify > Fix (up to 8 attempts)")
+    # Show model tiering info
+    complexity = ctx.get_complexity()
+    _log("ENGINE", f"Complexity: [bold]{complexity}[/bold]")
+    _log("ENGINE", f"Planner model:  {get_model_for_role('planner', complexity)}")
+    _log("ENGINE", f"Coder model:    {get_model_for_role('coder', complexity)}")
+    _log("ENGINE", f"Reviewer model: {get_model_for_role('reviewer', complexity)}")
+    _log("ENGINE", f"Analyzer model: {get_model_for_role('analyzer', complexity)}")
+
+    # Compute waves for display
+    try:
+        all_waves = compute_waves(dag)
+        _log("ENGINE", f"{len(dag)} task(s) in {len(all_waves)} wave(s) — parallel execution enabled")
+        for i, wave in enumerate(all_waves):
+            files = ", ".join(t.file for t in wave)
+            _log("WAVE", f"  {i}: [{len(wave)} task(s)] {files}")
+    except ValueError as e:
+        _log("WARNING", f"DAG issue: {e} — falling back to sequential")
+        all_waves = [[t] for t in dag]
+
+    _log("ENGINE", "Pipeline: Generate ‖ → Review ‖ → Verify → Fix failures")
 
     # -- Install deps before building
     install_dependencies(output_dir, ctx.state.tech_stack)
 
-    # -- DAG execution loop
-    global_iteration = 0
+    # -- Create worker pool
+    pool = WorkerPool()
+    start_time = time.monotonic()
 
-    while not ctx.all_tasks_terminal() and global_iteration < MAX_ITERATIONS:
-        global_iteration += 1
-        ready = ctx.get_ready_tasks()
+    try:
+        # -- Wave execution loop
+        global_iteration = 0
 
-        if not ready:
-            pending = [t for t in dag if not t.is_terminal]
-            if pending:
-                _log("DEADLOCK", "No tasks ready -- possible dependency issue")
-                for t in pending:
-                    t.status = TaskStatus.SKIPPED
-                    _log("SKIP", f"Task {t.id}: {t.file}")
-            break
+        while not ctx.all_tasks_terminal() and global_iteration < MAX_ITERATIONS:
+            global_iteration += 1
+            ready = get_ready_wave(dag)
 
-        for task_node in ready:
-            _process_task(task_node, ctx, output_dir)
+            if not ready:
+                pending = [t for t in dag if not t.is_terminal]
+                if pending:
+                    _log("DEADLOCK", "No tasks ready -- possible dependency issue")
+                    for t in pending:
+                        t.status = TaskStatus.SKIPPED
+                        _log("SKIP", f"Task {t.id}: {t.file}")
+                break
 
-        _show_task_progress(ctx)
-        _auto_save_session(ctx, output_dir)
+            wave_num = global_iteration
+            _log("WAVE", f"── Wave {wave_num}: {len(ready)} task(s) ──")
+
+            # Phase A: Generate all files in parallel
+            _log("PHASE A", f"Generating {len(ready)} file(s) in parallel")
+            _parallel_generate(ready, ctx, output_dir, pool)
+
+            # Phase B: Review all generated files in parallel
+            generated = [t for t in ready if t.status == TaskStatus.GENERATED]
+            if generated:
+                _log("PHASE B", f"Reviewing {len(generated)} file(s) in parallel")
+                _parallel_review(generated, ctx, output_dir, pool)
+
+            # Phase C: Verify all files
+            _log("PHASE C", "Verifying files (static analysis)")
+            _parallel_verify(ready, ctx, output_dir)
+
+            # Phase D: Fix only failures (sequential per task)
+            needs_fix = [t for t in ready if t.status == TaskStatus.NEEDS_FIX]
+            if needs_fix:
+                _log("PHASE D", f"Fixing {len(needs_fix)} failed file(s)")
+                for task_node in needs_fix:
+                    file_path = output_dir / task_node.file
+                    verification = verify_file(file_path, output_dir)
+                    _multi_strategy_fix(task_node, ctx, output_dir, verification)
+
+            _show_task_progress(ctx)
+            _auto_save_session(ctx, output_dir)
+
+    finally:
+        pool.shutdown(wait=True)
+
+    elapsed = time.monotonic() - start_time
 
     # -- Post-build: install deps again (new files may have added some)
     install_dependencies(output_dir, ctx.state.tech_stack)
@@ -118,59 +181,163 @@ def execute_plan(ctx: ContextManager, output_dir: Path) -> bool:
 
     console.print()
     _log("RESULT", f"Verified: {verified}  |  Failed: {failed}  |  Skipped: {skipped}")
-    _log("RESULT", f"Iterations used: {global_iteration}")
+    _log("RESULT", f"Total time: {elapsed:.1f}s  |  Iterations: {global_iteration}")
 
     _auto_save_session(ctx, output_dir)
     return ctx.state.completed
 
 
 # =====================================================================
-# Task processing — the core pipeline
+# Parallel Phase A: Generate all files in a wave concurrently
 # =====================================================================
 
-def _process_task(task_node, ctx: ContextManager, output_dir: Path) -> None:
-    """
-    Full pipeline for a single task:
-    Generate > Review (with re-review) > Verify > Multi-strategy fix loop
-    """
-    task_dict = {
-        "id": task_node.id,
-        "file": task_node.file,
-        "description": task_node.description,
-        "depends_on": task_node.depends_on,
-    }
+def _parallel_generate(
+    wave: list,
+    ctx: ContextManager,
+    output_dir: Path,
+    pool: WorkerPool,
+) -> None:
+    """Generate all files in the wave concurrently via WorkerPool."""
 
-    _log("TASK", f"#{task_node.id} {task_node.file}")
-    _log("TASK", f"  {task_node.description[:80]}")
+    def _gen_worker(task_node) -> str:
+        """Worker function for a single file generation."""
+        task_dict = {
+            "id": task_node.id,
+            "file": task_node.file,
+            "description": task_node.description,
+            "depends_on": task_node.depends_on,
+        }
+        task_node.status = TaskStatus.IN_PROGRESS
+        content = generate_file(task_dict, ctx, parallel=True)
+        write_file(output_dir, task_node.file, content)
+        task_node.status = TaskStatus.GENERATED
+        return content
 
-    # -- Step 1: Generate
-    task_node.status = TaskStatus.IN_PROGRESS
-    _log("GENERATE", task_node.file)
-    content = generate_file(task_dict, ctx)
-    write_file(output_dir, task_node.file, content)
-    task_node.status = TaskStatus.GENERATED
-
-    # -- Step 2: Review (with one re-review pass if issues found)
-    _review_and_patch(task_node, ctx, output_dir)
-
-    # -- Step 3: Verify (static analysis)
-    file_path = output_dir / task_node.file
-    _log("VERIFY", task_node.file)
-    verification = verify_file(file_path, output_dir)
-
-    if verification.passed:
-        task_node.status = TaskStatus.VERIFIED
-        _log("VERIFY", "  [cyan]passed[/cyan]")
+    if len(wave) == 1:
+        # Single task — use streaming for better UX
+        task_node = wave[0]
+        task_dict = {
+            "id": task_node.id,
+            "file": task_node.file,
+            "description": task_node.description,
+            "depends_on": task_node.depends_on,
+        }
+        task_node.status = TaskStatus.IN_PROGRESS
+        _log("GENERATE", task_node.file)
+        content = generate_file(task_dict, ctx, parallel=False)
+        write_file(output_dir, task_node.file, content)
+        task_node.status = TaskStatus.GENERATED
         return
 
-    _log("VERIFY", f"  failed: {verification.summary[:120]}")
+    # Multiple tasks — parallel silent generation
+    futures = []
+    for node in wave:
+        _log("GENERATE", f"⚡ {node.file}")
+        future = pool.submit(_gen_worker, node, task_id=node.id)
+        futures.append(future)
 
-    # -- Step 4: Multi-strategy fix loop
-    _multi_strategy_fix(task_node, ctx, output_dir, verification)
+    results = pool.collect(futures)
+    for r in results:
+        if not r.success:
+            _log("GENERATE", f"  ⚠ Task {r.task_id} failed: {r.error[:100]}")
+        else:
+            _log("GENERATE", f"  ✓ Task {r.task_id} done ({r.duration_ms}ms)")
 
 
 # =====================================================================
-# Review with re-review capability
+# Parallel Phase B: Review all generated files concurrently
+# =====================================================================
+
+def _parallel_review(
+    wave: list,
+    ctx: ContextManager,
+    output_dir: Path,
+    pool: WorkerPool,
+) -> None:
+    """Review all generated files in the wave concurrently."""
+
+    def _review_worker(task_node) -> dict:
+        """Worker function for reviewing a single file."""
+        task_node.status = TaskStatus.REVIEWING
+        review = review_file(task_node.file, ctx, parallel=True)
+
+        if review.get("approved", True):
+            return review
+
+        issues = review.get("issues", [])
+        critical_issues = [
+            i for i in issues
+            if i.get("severity") in ("critical", "warning")
+        ]
+        if not critical_issues:
+            return review
+
+        # Apply a patch for critical issues
+        feedback = "\n".join(
+            f"- [{i['severity']}] {i['description']}" for i in critical_issues
+        )
+        task_node.review_feedback = feedback
+        task_node.status = TaskStatus.NEEDS_FIX
+
+        content = patch_file(
+            task_node.file,
+            error="Reviewer found issues before execution",
+            review_feedback=feedback,
+            ctx=ctx,
+            parallel=True,
+        )
+        write_file(output_dir, task_node.file, content)
+        task_node.status = TaskStatus.GENERATED
+        return review
+
+    if len(wave) == 1:
+        # Single file — use sequential review
+        task_node = wave[0]
+        _review_and_patch(task_node, ctx, output_dir)
+        return
+
+    # Multiple files — parallel review
+    futures = []
+    for node in wave:
+        _log("REVIEW", f"⚡ {node.file}")
+        future = pool.submit(_review_worker, node, task_id=node.id)
+        futures.append(future)
+
+    results = pool.collect(futures)
+    for r in results:
+        if not r.success:
+            _log("REVIEW", f"  ⚠ Task {r.task_id} error: {r.error[:100]}")
+        else:
+            _log("REVIEW", f"  ✓ Task {r.task_id} reviewed ({r.duration_ms}ms)")
+
+
+# =====================================================================
+# Phase C: Verify all files (fast — runs locally, no model calls)
+# =====================================================================
+
+def _parallel_verify(
+    wave: list,
+    ctx: ContextManager,
+    output_dir: Path,
+) -> None:
+    """Verify all files in the wave. Sets status to VERIFIED or NEEDS_FIX."""
+    for task_node in wave:
+        if task_node.is_terminal:
+            continue
+        file_path = output_dir / task_node.file
+        _log("VERIFY", task_node.file)
+        verification = verify_file(file_path, output_dir)
+
+        if verification.passed:
+            task_node.status = TaskStatus.VERIFIED
+            _log("VERIFY", "  [cyan]passed[/cyan]")
+        else:
+            task_node.status = TaskStatus.NEEDS_FIX
+            _log("VERIFY", f"  failed: {verification.summary[:120]}")
+
+
+# =====================================================================
+# Sequential review (for single-file waves)
 # =====================================================================
 
 def _review_and_patch(task_node, ctx: ContextManager, output_dir: Path) -> None:

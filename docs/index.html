@@ -488,7 +488,27 @@
         <ul class="releases">
             <li class="release-item">
                 <div class="release-header">
-                    <span class="release-tag">v0.5.3</span>
+                    <span class="release-tag">v0.6.0</span>
+                    <span class="release-date">Feb 2026</span>
+                    <span class="release-title">Parallel Generation & Smart Model Tiering</span>
+                </div>
+                <div class="release-body">
+                    Lightning-fast project generation with adaptive AI model selection.
+                    <ul>
+                        <li><strong>Smart Model Tiering:</strong> 3 tiers (fast/medium/strong) auto-selected by project complexity</li>
+                        <li><strong>Parallel File Generation:</strong> Wave-based DAG execution — independent files build concurrently</li>
+                        <li><strong>Parallel Review & Verification:</strong> All files reviewed &amp; verified in parallel per wave</li>
+                        <li><strong>Worker Pool:</strong> Max 6 adaptive workers with CPU-aware throttling</li>
+                        <li><strong>Context Isolation:</strong> Thread-safe per-file memory, no full repo refeed</li>
+                        <li><strong>Dynamic Model Selection:</strong> Planner/Coder/Reviewer/Analyzer pick best model for task complexity</li>
+                        <li><strong>Silent Mode Generation:</strong> Threads use non-streaming model calls for speed</li>
+                        <li><strong>Deterministic Execution:</strong> Topological wave ordering guarantees correct dependency resolution</li>
+                    </ul>
+                </div>
+            </li>
+            <li class="release-item">
+                <div class="release-header">
+                    <span class="release-tag old">v0.5.3</span>
                     <span class="release-date">Feb 2026</span>
                     <span class="release-title">Analytics & Version Command</span>
                 </div>
