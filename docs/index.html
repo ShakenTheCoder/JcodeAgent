@@ -307,12 +307,12 @@
 <body>
 
 <div class="theme-switch">
-    <span class="switch-icon" id="icon-sun">&#9788;</span>
+    
     <label class="switch">
         <input type="checkbox" id="theme-checkbox" onchange="toggleTheme()">
         <span class="slider"></span>
     </label>
-    <span class="switch-icon" id="icon-moon">&#9790;</span>
+   
 </div>
 
 <div class="container">
@@ -349,14 +349,14 @@
         <div id="tab-mac" class="install-panel active">
             <div class="install-box">
                 <div class="label">install</div>
-                <code>curl -fsSL https://raw.githubusercontent.com/ShakenTheCoder/JcodeAgent/main/install.sh | bash</code>
+                <code>curl -fsSL https://getjcode.vercel.app/install.sh | bash</code>
                 <button class="copy-btn" onclick="copyInstall('mac')">Copy</button>
             </div>
         </div>
         <div id="tab-win" class="install-panel">
             <div class="install-box">
                 <div class="label">install</div>
-                <code>iwr -useb https://raw.githubusercontent.com/ShakenTheCoder/JcodeAgent/main/install.ps1 | iex</code>
+                <code>iwr -useb https://getjcode.vercel.app/install.ps1 | iex</code>
                 <button class="copy-btn" onclick="copyInstall('win')">Copy</button>
             </div>
         </div>
@@ -488,7 +488,40 @@
         <ul class="releases">
             <li class="release-item">
                 <div class="release-header">
-                    <span class="release-tag">v0.5.1</span>
+                    <span class="release-tag">v0.5.3</span>
+                    <span class="release-date">Feb 2026</span>
+                    <span class="release-title">Analytics & Version Command</span>
+                </div>
+                <div class="release-body">
+                    Install tracking and version display.
+                    <ul>
+                        <li>Analytics-enabled install endpoints via Vercel serverless functions</li>
+                        <li>Real-time install metrics: IP, timestamp, User-Agent, OS, counter</li>
+                        <li>Dashboard at /api/stats showing install statistics</li>
+                        <li>New <code>version</code> command in CLI to display current version</li>
+                        <li>Install commands now use getjcode.vercel.app for tracking</li>
+                    </ul>
+                </div>
+            </li>
+            <li class="release-item">
+                <div class="release-header">
+                    <span class="release-tag old">v0.5.2</span>
+                    <span class="release-date">Feb 2026</span>
+                    <span class="release-title">Agentic Auto-Fix</span>
+                </div>
+                <div class="release-body">
+                    Eliminated generic advice &mdash; JCode now acts as true agentic fixer.
+                    <ul>
+                        <li>Auto-capture runtime errors and feed to agent (5-attempt loop)</li>
+                        <li>Post-build Phase 3: runtime verification catches missing imports</li>
+                        <li>CHAT_SYSTEM prompt rewritten: no generic tips, reads actual files, outputs fixes</li>
+                        <li>Smart run command: detects project type and executes properly</li>
+                    </ul>
+                </div>
+            </li>
+            <li class="release-item">
+                <div class="release-header">
+                    <span class="release-tag old">v0.5.1</span>
                     <span class="release-date">Feb 2026</span>
                     <span class="release-title">Resilient Fix Engine & Docs</span>
                 </div>
@@ -630,8 +663,8 @@
 
     function copyInstall(os) {
         const commands = {
-            mac: 'curl -fsSL https://raw.githubusercontent.com/ShakenTheCoder/JcodeAgent/main/install.sh | bash',
-            win: 'iwr -useb https://raw.githubusercontent.com/ShakenTheCoder/JcodeAgent/main/install.ps1 | iex'
+            mac: 'curl -fsSL https://getjcode.vercel.app/install.sh | bash',
+            win: 'iwr -useb https://getjcode.vercel.app/install.ps1 | iex'
         };
         navigator.clipboard.writeText(commands[os]).then(() => {
             const btn = event.target;

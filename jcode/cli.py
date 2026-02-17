@@ -66,6 +66,7 @@ HOME_HELP = """
   [cyan]build[/cyan] <prompt>     Plan, generate, review, verify, fix — fully automated
   [cyan]projects[/cyan]           List all saved projects (select to enter)
   [cyan]continue[/cyan]           Resume the last project
+  [cyan]version[/cyan]            Show JCode version
   [cyan]update[/cyan]             Update JCode to latest version
   [cyan]uninstall[/cyan]          Remove JCode — projects are saved to Desktop
   [cyan]clear[/cyan]              Clear the terminal
@@ -336,6 +337,9 @@ def _home_repl(settings_mgr: SettingsManager, history: InMemoryHistory) -> None:
             _cmd_update()
         elif cmd == "uninstall":
             _cmd_uninstall(settings_mgr)
+        elif cmd == "version":
+            console.print(f"\n  [bold cyan]JCode[/bold cyan] [white]v{__version__}[/white]")
+            console.print(f"  [dim]https://github.com/ShakenTheCoder/JcodeAgent[/dim]\n")
         else:
             # Treat anything else as an implicit build prompt
             result = _cmd_build(user_input, settings_mgr)
