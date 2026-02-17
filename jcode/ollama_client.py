@@ -1,17 +1,19 @@
 """
 Ollama client wrapper — talks to the local Ollama server.
 
-v3.0 — Adaptive model tiering. NEVER pulls models during builds.
+v3.1 — Speed-first. NEVER pulls models. Handles timeouts gracefully.
 
 Key rules:
   1. Only use locally installed models
   2. If a model isn't available, fall back to what IS available
   3. Never block a build with a model download
-  4. Escalation models are optional — only used if already installed
+  4. Handle Ollama being busy (concurrent JCode instances) gracefully
+  5. Filter <think> blocks from reasoning models during streaming
 """
 
 from __future__ import annotations
 
+import re
 import threading
 
 import ollama
@@ -121,10 +123,27 @@ def call_model(
     if num_ctx:
         options["num_ctx"] = num_ctx
 
-    if stream:
-        return _stream(model, messages, options)
-    else:
-        return _generate_silent(model, messages, options)
+    try:
+        if stream:
+            return _stream(model, messages, options)
+        else:
+            return _generate_silent(model, messages, options)
+    except Exception as e:
+        err_str = str(e).lower()
+        if "busy" in err_str or "timeout" in err_str or "connection" in err_str:
+            console.print(f"\n[yellow]⚠ Ollama is busy (another instance running?). Retrying...[/yellow]")
+            import time
+            time.sleep(3)
+            try:
+                if stream:
+                    return _stream(model, messages, options)
+                else:
+                    return _generate_silent(model, messages, options)
+            except Exception as retry_err:
+                console.print(f"\n[red]✗ Ollama error: {retry_err}[/red]")
+                console.print("[dim]  Is another JCode instance running? Only one can generate at a time.[/dim]")
+                return ""
+        raise
 
 
 def call_model_silent(
@@ -161,13 +180,19 @@ def _generate_silent(model: str, messages: list[dict], options: dict) -> str:
         messages=messages,
         options=options,
     )
-    return resp["message"]["content"]
+    text = resp["message"]["content"]
+    # Strip <think> blocks from reasoning models
+    text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+    return text
 
 
 def _stream(model: str, messages: list[dict], options: dict) -> str:
     """Stream tokens to the console and return the full text.
+    Filters out <think>...</think> blocks from reasoning models.
     Uses a lock so parallel streams don't interleave."""
     chunks: list[str] = []
+    in_think = False
+
     with _stream_lock:
         for chunk in ollama.chat(
             model=model,
@@ -177,6 +202,21 @@ def _stream(model: str, messages: list[dict], options: dict) -> str:
         ):
             token = chunk["message"]["content"]
             chunks.append(token)
+
+            # Filter <think> blocks — don't show them to the user
+            if "<think>" in token:
+                in_think = True
+                continue
+            if "</think>" in token:
+                in_think = False
+                continue
+            if in_think:
+                continue
+
             console.print(token, end="", highlight=False)
         console.print()  # newline after stream
-    return "".join(chunks)
+
+    full_text = "".join(chunks)
+    # Also strip any complete <think> blocks from the final text
+    full_text = re.sub(r"<think>.*?</think>", "", full_text, flags=re.DOTALL).strip()
+    return full_text

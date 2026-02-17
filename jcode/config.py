@@ -1,14 +1,18 @@
 """
 JCode configuration — models, roles, paths, defaults.
 
-v0.8.0 — Adaptive model tiering.
+v0.8.1 — Speed-first model tiering.
 
 Key design principles:
   1. NEVER pull models during builds — only use what's locally installed.
-  2. Two tiers: FAST (7b) and DEFAULT (14b). No 32b by default.
-  3. Complexity detection is tight — simple tasks stay simple.
-  4. Escalation happens ONLY on failure, not preemptively.
-  5. Prefer the smallest model that can do the job.
+  2. Use qwen2.5-coder for EVERYTHING (planner, coder, reviewer, analyzer).
+     deepseek-r1 is TOO SLOW for planning — it wastes 3-5 min "thinking"
+     before outputting anything. qwen2.5-coder follows JSON instructions
+     better and responds in seconds.
+  3. deepseek-r1 is ONLY used as an escalation model for deep analysis
+     when multiple fix attempts have failed.
+  4. Two tiers: FAST (7b) and DEFAULT (14b). 32b is optional escalation.
+  5. Complexity detection is tight — simple tasks stay simple.
 """
 
 from pathlib import Path
@@ -17,52 +21,51 @@ from enum import Enum
 
 
 # ═══════════════════════════════════════════════════════════════════
-# Adaptive Model Tiering
+# Model Tiering — Speed First
 # ═══════════════════════════════════════════════════════════════════
 #
-# Only two tiers used by default (matches installer):
-#   FAST    — 7b models: quick generation, lint review, config files
-#   DEFAULT — 14b models: planning, code generation, deep review
+# ALL roles use qwen2.5-coder by default (it's fast + follows instructions).
+# deepseek-r1 is ONLY used for deep analysis on failures (escalation).
 #
-# 32b models are NEVER required. If installed, they serve as
-# escalation targets when a file fails generation 3+ times.
-#
-#   Complexity  │ Planner    │ Coder   │ Reviewer │ Analyzer
-#   ────────────┼────────────┼─────────┼──────────┼─────────
-#   simple      │ fast       │ fast    │ fast     │ fast
-#   medium      │ default    │ default │ fast     │ fast
-#   complex     │ default    │ default │ default  │ default
+#   Complexity  │ Planner        │ Coder          │ Reviewer       │ Analyzer
+#   ────────────┼────────────────┼────────────────┼────────────────┼────────────
+#   simple      │ coder:7b       │ coder:14b      │ coder:7b       │ coder:7b
+#   medium      │ coder:14b      │ coder:14b      │ coder:7b       │ coder:7b
+#   complex     │ coder:14b      │ coder:14b      │ coder:14b      │ coder:14b
 # ═══════════════════════════════════════════════════════════════════
 
 # ── Model Tiers ────────────────────────────────────────────────────
 MODEL_TIERS = {
     "fast": {
-        "reasoning": "deepseek-r1:14b",
         "coding":    "qwen2.5-coder:7b",
+        "reasoning": "qwen2.5-coder:7b",     # Use coder model — deepseek-r1 too slow
     },
     "default": {
-        "reasoning": "deepseek-r1:14b",
         "coding":    "qwen2.5-coder:14b",
+        "reasoning": "qwen2.5-coder:14b",    # Use coder model — deepseek-r1 too slow
     },
     "strong": {
-        "reasoning": "deepseek-r1:14b",
-        "coding":    "qwen2.5-coder:14b",
+        "coding":    "qwen2.5-coder:32b",
+        "reasoning": "qwen2.5-coder:32b",    # Escalation only — if installed
     },
 }
 
-# Which family each role uses
+# Escalation model for deep analysis (only used when fix attempts fail)
+DEEP_REASONING_MODEL = "deepseek-r1:14b"
+
+# Which family each role uses (all use coding now — it's faster)
 ROLE_FAMILY = {
-    "planner":  "reasoning",
+    "planner":  "coding",     # Was "reasoning" — deepseek-r1 too slow
     "coder":    "coding",
     "reviewer": "coding",
-    "analyzer": "reasoning",
+    "analyzer": "coding",     # Was "reasoning" — deepseek-r1 too slow
 }
 
 # Complexity → tier mapping per role
 ROLE_TIER_MAP = {
     "simple": {
-        "planner":  "fast",
-        "coder":    "default",   # Always use 14b coder — quality matters
+        "planner":  "fast",       # 7b planner is fast enough for simple
+        "coder":    "default",    # Always 14b coder for quality
         "reviewer": "fast",
         "analyzer": "fast",
     },
@@ -140,12 +143,17 @@ def get_model_for_role(role: str, complexity: str = "medium") -> str:
 
 def get_escalation_model(role: str) -> str | None:
     """Get a stronger model for escalation (only if locally available).
-    Returns None if no stronger model is available."""
+    Returns None if no stronger model is available.
+    For analyzer, tries deepseek-r1 first (good at reasoning about errors)."""
     family = ROLE_FAMILY.get(role, "coding")
-    # Check if a 32b model is available locally
-    candidates = [
-        "qwen2.5-coder:32b" if family == "coding" else "deepseek-r1:32b",
-    ]
+
+    candidates = []
+    # For analyzer, deepseek-r1 is the best escalation (deep reasoning)
+    if role == "analyzer":
+        candidates.append(DEEP_REASONING_MODEL)
+    # Then try 32b coder
+    candidates.append("qwen2.5-coder:32b")
+
     for model in candidates:
         if _is_model_local(model):
             return model
@@ -166,10 +174,10 @@ def get_all_required_models(complexity: str = "medium") -> list[str]:
 
 
 # ── Legacy constants (kept for backward compat, resolved dynamically) ──
-PLANNER_MODEL = MODEL_TIERS["default"]["reasoning"]
-CODER_MODEL = MODEL_TIERS["default"]["coding"]
-REVIEWER_MODEL = MODEL_TIERS["fast"]["coding"]
-ANALYZER_MODEL = MODEL_TIERS["default"]["reasoning"]
+PLANNER_MODEL = MODEL_TIERS["default"]["coding"]       # qwen2.5-coder:14b
+CODER_MODEL = MODEL_TIERS["default"]["coding"]         # qwen2.5-coder:14b
+REVIEWER_MODEL = MODEL_TIERS["fast"]["coding"]         # qwen2.5-coder:7b
+ANALYZER_MODEL = MODEL_TIERS["default"]["coding"]      # qwen2.5-coder:14b
 
 
 # ── Generation Parameters ──────────────────────────────────────────
@@ -177,7 +185,7 @@ BASE_PLANNER_CTX = 8192
 BASE_CODER_CTX = 8192
 
 PLANNER_OPTIONS = {
-    "temperature": 0.6,
+    "temperature": 0.3,       # Low temp → reliable JSON output
     "top_p": 0.9,
     "num_ctx": BASE_PLANNER_CTX,
 }
@@ -209,16 +217,16 @@ COMPLEXITY_SCALING = {
 }
 
 # ── Worker Pool Settings ───────────────────────────────────────────
-MAX_WORKERS = 6               # Maximum concurrent workers
+MAX_WORKERS = 4               # Maximum concurrent workers
 MIN_WORKERS = 1               # Minimum concurrent workers
 CPU_HIGH_THRESHOLD = 85.0     # Reduce concurrency above this %
 CPU_LOW_THRESHOLD = 50.0      # Increase concurrency below this %
 WORKER_POLL_INTERVAL = 2.0    # Seconds between CPU checks
 
 # ── Limits ─────────────────────────────────────────────────────────
-MAX_ITERATIONS = 15
+MAX_ITERATIONS = 10           # Total wave iterations before giving up
 MAX_FILE_READ_CHARS = 12000
-MAX_TASK_FAILURES = 8         # Per task before escalation — generous retry budget
+MAX_TASK_FAILURES = 5         # Per task before escalation
 MAX_DIFF_LINES = 80           # Prefer patches under this
 
 # ── Project Defaults ───────────────────────────────────────────────

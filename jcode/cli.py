@@ -208,7 +208,7 @@ def main():
         console.print("  [dim]Ollama is not running.[/dim]")
         console.print("  [dim]Start it with:[/dim]  [cyan]ollama serve[/cyan]")
         console.print(
-            "  [dim]Then pull models:[/dim]  [cyan]ollama pull deepseek-r1:7b && ollama pull qwen2.5-coder:7b[/cyan]",
+            "  [dim]Then pull models:[/dim]  [cyan]ollama pull qwen2.5-coder:14b && ollama pull qwen2.5-coder:7b[/cyan]",
         )
         sys.exit(1)
     console.print("  [cyan]Ollama connected[/cyan]")

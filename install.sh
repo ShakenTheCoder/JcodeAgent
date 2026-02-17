@@ -31,7 +31,7 @@ NC='\033[0m'
 JCODE_HOME="${JCODE_HOME:-$HOME/JcodeAgent}"
 JCODE_REPO="https://github.com/ShakenTheCoder/JcodeAgent.git"
 MIN_PYTHON="3.10"
-MODELS=("deepseek-r1:14b" "qwen2.5-coder:14b")
+MODELS=("qwen2.5-coder:14b" "qwen2.5-coder:7b")
 
 # ── Spinner ────────────────────────────────────────────────────────
 _spinner_pid=""
