@@ -477,6 +477,42 @@ def _cmd_build(
     console.print(f"  [dim]Saved to:[/dim] [cyan]{output_dir}[/cyan]\n")
 
     _auto_save(ctx, output_dir)
+
+    # -- Phase 3: Post-build runtime verification
+    if success:
+        run_cmd, run_cwd = _detect_run_command(output_dir)
+        if run_cmd:
+            console.print()
+            _log("PHASE 3", "Runtime verification -- running the project to check for errors")
+            _install_deps_if_needed(output_dir)
+
+            exit_code, run_output = _run_and_capture(run_cmd, run_cwd)
+
+            if exit_code not in (0, -2) and run_output.strip():
+                _log("VERIFY", f"Runtime error detected (exit code {exit_code})")
+                # Auto-fix loop
+                MAX_POST_BUILD_FIXES = 3
+                for fix_attempt in range(1, MAX_POST_BUILD_FIXES + 1):
+                    _log("FIX", f"Post-build fix {fix_attempt}/{MAX_POST_BUILD_FIXES}")
+                    error_msg = run_output[-3000:]
+                    fix_prompt = (
+                        f"The project was just built but fails to run. "
+                        f"EXACT error output:\n\n```\n{error_msg}\n```\n\n"
+                        f"Command: {' '.join(run_cmd)}\n"
+                        f"Fix the code. Output corrected files with ===FILE:=== format."
+                    )
+                    _cmd_chat(ctx, output_dir, fix_prompt)
+                    _install_deps_if_needed(output_dir)
+
+                    exit_code, run_output = _run_and_capture(run_cmd, run_cwd)
+                    if exit_code in (0, -2):
+                        _log("VERIFY", "Runtime verification passed after fix")
+                        break
+                else:
+                    _log("VERIFY", "Could not auto-fix runtime errors -- you can fix manually in chat")
+            elif exit_code in (0, -2):
+                _log("VERIFY", "Runtime verification passed")
+
     return ctx, output_dir
 
 
@@ -686,7 +722,7 @@ def _apply_file_changes(response: str, output_dir: Path, ctx: ContextManager) ->
 # ═══════════════════════════════════════════════════════════════════
 
 def _cmd_run(ctx: ContextManager, output_dir: Path) -> None:
-    """Auto-detect and run the project. Installs deps first if needed."""
+    """Auto-detect and run the project. If it fails, auto-fix and retry."""
     if not output_dir or not output_dir.exists():
         console.print("  [dim]No project directory.[/dim]")
         return
@@ -696,23 +732,73 @@ def _cmd_run(ctx: ContextManager, output_dir: Path) -> None:
     # Install dependencies first if needed
     _install_deps_if_needed(output_dir)
 
-    # 1. Python: look for main entry points (also in subdirs)
+    # Find the run command
+    run_cmd, run_cwd = _detect_run_command(output_dir)
+    if not run_cmd:
+        console.print("  [dim]Could not detect how to run this project.[/dim]")
+        console.print("  [dim]Ask JCode: 'how do I run this project?'[/dim]")
+        return
+
+    MAX_RUN_FIX_ATTEMPTS = 5
+    for attempt in range(1, MAX_RUN_FIX_ATTEMPTS + 1):
+        _log("RUN", f"{' '.join(run_cmd)} (in {run_cwd.name})")
+
+        # Try to run — capture output for error detection
+        exit_code, output = _run_and_capture(run_cmd, run_cwd)
+
+        if exit_code == 0:
+            _log("RUN", "Process exited successfully")
+            return
+
+        if exit_code == -2:
+            # User pressed Ctrl+C — not an error
+            return
+
+        # Run failed — auto-fix
+        _log("RUN", f"Process exited with code {exit_code}")
+
+        if attempt >= MAX_RUN_FIX_ATTEMPTS:
+            _log("RUN", f"Failed after {MAX_RUN_FIX_ATTEMPTS} fix attempts")
+            console.print(
+                "  [dim]Auto-fix could not resolve the issue. Try fixing manually:[/dim]"
+            )
+            console.print(f"  [dim]Tell JCode what you see and it will help.[/dim]")
+            return
+
+        # Feed the error to the agent for fixing
+        _log("FIX", f"Attempt {attempt}/{MAX_RUN_FIX_ATTEMPTS} -- auto-fixing runtime error")
+        error_msg = output[-3000:] if len(output) > 3000 else output
+
+        fix_prompt = (
+            f"The project failed to run. Here is the EXACT error output:\n\n"
+            f"```\n{error_msg}\n```\n\n"
+            f"Command: {' '.join(run_cmd)}\n"
+            f"Working directory: {run_cwd}\n\n"
+            f"Read the error, find the affected file(s) in the project, and fix them. "
+            f"Output the corrected files using ===FILE:=== format. "
+            f"Do NOT give advice or suggestions — just fix the code."
+        )
+        _cmd_chat(ctx, output_dir, fix_prompt)
+
+        # Re-install deps in case the fix added new ones
+        _install_deps_if_needed(output_dir)
+
+        _log("FIX", "Re-running after fix...")
+
+
+def _detect_run_command(output_dir: Path) -> tuple[list[str] | None, Path | None]:
+    """Detect the command needed to run this project. Returns (cmd, cwd) or (None, None)."""
+    # 1. Python: look for main entry points
     for entry in ("main.py", "app.py", "manage.py", "server.py", "run.py"):
-        # Check root
         candidate = output_dir / entry
         if candidate.exists():
-            _log("RUN", f"python3 {entry}")
-            _run_subprocess(["python3", str(candidate)], cwd=output_dir)
-            return
-        # Check common subdirs
+            return ["python3", str(candidate)], output_dir
         for subdir in ("backend", "src", "server", "api"):
             candidate = output_dir / subdir / entry
             if candidate.exists():
-                _log("RUN", f"python3 {subdir}/{entry}")
-                _run_subprocess(["python3", str(candidate)], cwd=output_dir / subdir)
-                return
+                return ["python3", str(candidate)], output_dir / subdir
 
-    # 2. Node: package.json with start script (root or subdirs)
+    # 2. Node: package.json with start/dev script
     for search_dir in [output_dir] + [output_dir / d for d in ("backend", "server", "api", "frontend", "client")]:
         pkg_json = search_dir / "package.json"
         if pkg_json.exists():
@@ -720,46 +806,63 @@ def _cmd_run(ctx: ContextManager, output_dir: Path) -> None:
                 pkg = json.loads(pkg_json.read_text())
                 scripts = pkg.get("scripts", {})
                 if "start" in scripts:
-                    _log("RUN", f"npm start (in {search_dir.name})")
-                    _run_subprocess(["npm", "start"], cwd=search_dir)
-                    return
+                    return ["npm", "start"], search_dir
                 elif "dev" in scripts:
-                    _log("RUN", f"npm run dev (in {search_dir.name})")
-                    _run_subprocess(["npm", "run", "dev"], cwd=search_dir)
-                    return
+                    return ["npm", "run", "dev"], search_dir
             except Exception:
                 pass
 
     # 3. HTML: look for index.html
-    index_html = output_dir / "index.html"
-    if not index_html.exists():
-        # Check public/ or frontend/
-        for subdir in ("public", "frontend", "client", "dist"):
-            candidate = output_dir / subdir / "index.html"
-            if candidate.exists():
-                index_html = candidate
-                break
+    for loc in [output_dir, output_dir / "public", output_dir / "frontend",
+                output_dir / "client", output_dir / "dist"]:
+        index_html = loc / "index.html"
+        if index_html.exists():
+            return ["open", str(index_html)], loc
 
-    if index_html.exists():
-        _log("RUN", f"Opening in browser: {index_html.name}")
-        try:
-            import webbrowser
-            webbrowser.open(f"file://{index_html}")
-            console.print(f"  [dim]Opened in browser: {index_html}[/dim]")
-        except Exception as e:
-            console.print(f"  [dim]Could not open browser: {e}[/dim]")
-        return
-
-    # 4. Look for any .py file
+    # 4. Any .py file
     py_files = list(output_dir.glob("*.py"))
     if py_files:
-        main_file = py_files[0]
-        _log("RUN", f"python3 {main_file.name}")
-        _run_subprocess(["python3", str(main_file)], cwd=output_dir)
-        return
+        return ["python3", str(py_files[0])], output_dir
 
-    console.print("  [dim]Could not detect how to run this project.[/dim]")
-    console.print("  [dim]Ask JCode: 'how do I run this project?'[/dim]")
+    return None, None
+
+
+def _run_and_capture(cmd: list[str], cwd: Path) -> tuple[int, str]:
+    """
+    Run a subprocess, stream output to console AND capture it.
+    Returns (exit_code, captured_output).
+    exit_code -2 means user interrupted (Ctrl+C).
+    """
+    console.print(f"  [dim]Running: {' '.join(cmd)}[/dim]")
+    console.print(f"  [dim]Press Ctrl+C to stop[/dim]\n")
+
+    captured_lines = []
+    try:
+        process = subprocess.Popen(
+            cmd,
+            cwd=cwd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+        )
+        for line in iter(process.stdout.readline, ""):
+            console.print(f"  {line.rstrip()}")
+            captured_lines.append(line)
+        process.wait()
+        return process.returncode, "".join(captured_lines)
+    except KeyboardInterrupt:
+        process.terminate()
+        console.print("\n  [dim]Process stopped.[/dim]")
+        return -2, "".join(captured_lines)
+    except FileNotFoundError:
+        msg = f"Command not found: {cmd[0]}"
+        console.print(f"  [dim]{msg}[/dim]")
+        return 1, msg
+    except Exception as e:
+        msg = f"Error: {e}"
+        console.print(f"  [dim]{msg}[/dim]")
+        return 1, msg
 
 
 def _install_deps_if_needed(output_dir: Path) -> None:
@@ -799,33 +902,9 @@ def _install_deps_if_needed(output_dir: Path) -> None:
             console.print(f"  [dim]pip install failed: {e}[/dim]")
 
 
-def _run_subprocess(cmd: list[str], cwd: Path) -> None:
-    """Run a subprocess and stream output to the user."""
-    console.print(f"  [dim]Running: {' '.join(cmd)}[/dim]")
-    console.print(f"  [dim]Press Ctrl+C to stop[/dim]\n")
-    try:
-        process = subprocess.Popen(
-            cmd,
-            cwd=cwd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            bufsize=1,
-        )
-        for line in iter(process.stdout.readline, ""):
-            console.print(f"  {line.rstrip()}")
-        process.wait()
-        if process.returncode == 0:
-            _log("RUN", "Process exited successfully")
-        else:
-            _log("RUN", f"Process exited with code {process.returncode}")
-    except KeyboardInterrupt:
-        process.terminate()
-        console.print("\n  [dim]Process stopped.[/dim]")
-    except FileNotFoundError:
-        console.print(f"  [dim]Command not found: {cmd[0]}[/dim]")
-    except Exception as e:
-        console.print(f"  [dim]Error: {e}[/dim]")
+def _run_subprocess(cmd: list[str], cwd: Path) -> tuple[int, str]:
+    """Legacy wrapper — delegates to _run_and_capture."""
+    return _run_and_capture(cmd, cwd)
 
 
 # ═══════════════════════════════════════════════════════════════════
