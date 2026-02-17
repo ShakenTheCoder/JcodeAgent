@@ -1,5 +1,45 @@
 # Changelog
 
+## v0.9.6 — Interactive Model Pulling
+
+Feature: JCode now detects missing ideal models and offers to pull them before starting a build. Users can choose to download recommended models or continue with fallback models.
+
+### Interactive Model Management
+- Before starting a build, JCode checks if all ideal models for the task classification are installed
+- If missing models are detected, shows a table comparing ideal vs. fallback models for each role
+- Prompts user: "Pull missing models now?" with Yes/No choice
+- If Yes: pulls each missing model with progress bar, then continues with ideal models
+- If No: continues immediately with fallback models (no delay, no errors)
+- Example: `heavy/large` task recommends `deepseek-r1:70b` (not installed) → offers to pull or falls back to `deepseek-r1:14b`
+
+### New Functions
+- `get_ideal_and_actual_models()` — returns role → (ideal_model, actual_model, is_fallback) mapping
+- `get_missing_ideal_models()` — returns list of missing ideal models grouped by roles
+- `pull_model()` — pulls a model from Ollama registry with progress bar
+- Enhanced `ensure_models_for_complexity()` — interactive pre-check with pull option (was a stub)
+
+### User Experience
+```
+⚠ Some ideal models are not installed:
+
+  Role        Ideal Model           Will Use              Status
+  planner     deepseek-r1:70b       deepseek-r1:14b       fallback
+  coder       qwen3-coder:32b       qwen2.5-coder:32b     fallback
+  reviewer    qwen2.5-coder:14b     qwen2.5-coder:14b     ✓
+  analyzer    deepseek-r1:14b       deepseek-r1:14b       ✓
+
+  Missing models: deepseek-r1:70b, qwen3-coder:32b
+  Estimated download: ~24GB
+
+Pull missing models now? (if no, will use fallback models) [y/N]:
+```
+
+### Files Changed
+- `jcode/config.py` — `get_ideal_and_actual_models()`, `get_missing_ideal_models()`, `pull_model()` with progress bar
+- `jcode/ollama_client.py` — Enhanced `ensure_models_for_complexity()` with interactive pull workflow
+
+---
+
 ## v0.9.5 — Model Fallback Fix
 
 Critical bugfix: `_is_model_local()` incorrectly matched different quantizations of the same base model. When requesting `deepseek-r1:70b` (not installed), it returned True because `deepseek-r1:14b` was installed, causing `model 'deepseek-r1:70b' not found (status code: 404)` errors.

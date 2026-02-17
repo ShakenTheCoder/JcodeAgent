@@ -292,6 +292,55 @@ def refresh_local_models() -> set[str]:
     return _get_local_models()
 
 
+def pull_model(model_name: str) -> bool:
+    """Pull a model from Ollama registry.
+    
+    Returns:
+        True if successful, False if failed.
+    """
+    try:
+        import ollama as _ollama
+        from rich.console import Console
+        from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn
+        
+        console = Console()
+        
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[bold blue]{task.description}"),
+            BarColumn(),
+            TaskProgressColumn(),
+            console=console,
+        ) as progress:
+            task = progress.add_task(f"Pulling {model_name}...", total=100)
+            
+            # Stream the pull progress
+            for resp in _ollama.pull(model_name, stream=True):
+                if isinstance(resp, dict):
+                    status = resp.get("status", "")
+                    if "digest" in resp:
+                        # Has progress info
+                        completed = resp.get("completed", 0)
+                        total = resp.get("total", 1)
+                        if total > 0:
+                            pct = int((completed / total) * 100)
+                            progress.update(task, completed=pct, description=f"Pulling {model_name} - {status}")
+                    else:
+                        # Status only
+                        progress.update(task, description=f"Pulling {model_name} - {status}")
+            
+            progress.update(task, completed=100, description=f"✓ Pulled {model_name}")
+        
+        # Refresh cache after successful pull
+        refresh_local_models()
+        return True
+        
+    except Exception as e:
+        from rich.console import Console
+        Console().print(f"[red]✗ Failed to pull {model_name}: {e}[/red]")
+        return False
+
+
 def _is_model_local(model: str) -> bool:
     """Check if a model is installed locally."""
     local = _get_local_models()
@@ -443,6 +492,64 @@ def get_all_required_models(
         if model:
             models.add(model)
     return sorted(models)
+
+
+def get_ideal_and_actual_models(
+    complexity: str = "medium",
+    size: str = "medium",
+) -> dict[str, tuple[str, str, bool]]:
+    """Return role → (ideal_model, actual_model, is_fallback) mapping.
+    
+    For each role, returns:
+    - ideal_model: The best model for the role according to ROLE_ROUTING
+    - actual_model: The model that will actually be used (may be fallback)
+    - is_fallback: True if actual_model != ideal_model
+    """
+    classification_key = f"{complexity}/{size}"
+    routing = ROLE_ROUTING.get(classification_key, ROLE_ROUTING["medium/medium"])
+    result = {}
+    
+    for role, req in routing.items():
+        # Find the ideal model (highest priority for this category/size)
+        ideal_candidates = [
+            spec for spec in MODEL_REGISTRY
+            if spec.category == req.category
+            and spec.size_class == req.size_class
+        ]
+        ideal_model = min(ideal_candidates, key=lambda s: s.priority).name if ideal_candidates else None
+        
+        # Find the actual model that will be used
+        actual_model = _find_best_model(req.category, req.size_class)
+        
+        # Determine if it's a fallback
+        is_fallback = (actual_model != ideal_model) if ideal_model else False
+        
+        result[role] = (ideal_model or "none", actual_model or "none", is_fallback)
+    
+    return result
+
+
+def get_missing_ideal_models(
+    complexity: str = "medium",
+    size: str = "medium",
+) -> list[tuple[str, str]]:
+    """Return list of (model_name, roles) tuples for ideal models that aren't installed.
+    
+    Groups missing models by name so we can show which roles would benefit.
+    Returns: [(model_name, "planner, coder"), ...]
+    """
+    ideal_actual = get_ideal_and_actual_models(complexity, size)
+    
+    # Group roles by missing ideal model
+    missing = {}
+    for role, (ideal, actual, is_fallback) in ideal_actual.items():
+        if is_fallback and ideal != "none":
+            if ideal not in missing:
+                missing[ideal] = []
+            missing[ideal].append(role)
+    
+    # Convert to list of tuples
+    return [(model, ", ".join(roles)) for model, roles in sorted(missing.items())]
 
 
 def get_model_spec(model_name: str) -> ModelSpec | None:

@@ -105,11 +105,86 @@ def ensure_models_for_complexity(
     complexity: str,
     size: str = "medium",
 ) -> None:
-    """Verify all models needed for a classification are available.
-    Reports missing but NEVER pulls during builds."""
-    models = get_all_required_models(complexity, size)
-    if not models:
-        console.print("[yellow]⚠ No models found for this classification. Install models with: ollama pull <model>[/yellow]")
+    """Check if ideal models are available, offer to pull if missing.
+    
+    If ideal models aren't installed:
+    1. Show what's missing and what fallbacks will be used
+    2. Ask user permission to pull missing models
+    3. Pull if approved, or continue with fallbacks if declined
+    """
+    from jcode.config import (
+        get_missing_ideal_models,
+        get_ideal_and_actual_models,
+        pull_model,
+        refresh_local_models,
+    )
+    
+    missing = get_missing_ideal_models(complexity, size)
+    
+    if not missing:
+        # All ideal models are installed
+        return
+    
+    # Show what's missing
+    console.print()
+    console.print("[yellow]⚠ Some ideal models are not installed:[/yellow]")
+    
+    ideal_actual = get_ideal_and_actual_models(complexity, size)
+    
+    # Build a table showing ideal vs. fallback
+    from rich.table import Table
+    table = Table(show_header=True, header_style="bold cyan", box=None, padding=(0, 2))
+    table.add_column("Role", style="dim")
+    table.add_column("Ideal Model", style="green")
+    table.add_column("Will Use", style="yellow")
+    table.add_column("Status")
+    
+    for role in ("planner", "coder", "reviewer", "analyzer"):
+        ideal, actual, is_fallback = ideal_actual[role]
+        if is_fallback:
+            status = "[red]fallback[/red]"
+            table.add_row(role, ideal, actual, status)
+        else:
+            status = "[green]✓[/green]"
+            table.add_row(role, ideal, actual, status)
+    
+    console.print(table)
+    console.print()
+    
+    # Calculate total size to download
+    model_names = [model for model, _ in missing]
+    size_estimate = len(model_names) * 12  # Rough estimate: 12GB per model average
+    
+    console.print(f"  [dim]Missing models: {', '.join(model_names)}[/dim]")
+    console.print(f"  [dim]Estimated download: ~{size_estimate}GB[/dim]")
+    console.print()
+    
+    # Ask permission
+    from rich.prompt import Confirm
+    should_pull = Confirm.ask(
+        "[bold cyan]Pull missing models now?[/bold cyan] (if no, will use fallback models)",
+        default=False,
+    )
+    
+    if should_pull:
+        console.print()
+        success_count = 0
+        for model_name, roles in missing:
+            console.print(f"[bold]Pulling {model_name}[/bold] [dim](for {roles})[/dim]")
+            if pull_model(model_name):
+                success_count += 1
+            else:
+                console.print(f"[yellow]  Will use fallback for {roles}[/yellow]")
+        
+        if success_count > 0:
+            console.print(f"\n[green]✓ Pulled {success_count}/{len(missing)} model(s)[/green]")
+            refresh_local_models()
+        else:
+            console.print("\n[yellow]No models were pulled. Continuing with fallbacks.[/yellow]")
+    else:
+        console.print("[dim]Continuing with fallback models...[/dim]")
+    
+    console.print()
 
 
 def check_ollama_running() -> bool:
