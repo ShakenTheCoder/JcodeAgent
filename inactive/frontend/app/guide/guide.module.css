@@ -1,0 +1,33 @@
+.heroSub {
+  color: var(--text-dim);
+  font-size: 1rem;
+  margin-bottom: 3rem;
+}
+
+.callout {
+  background: var(--accent-dim);
+  border-left: 3px solid var(--accent);
+  padding: 1rem 1.2rem;
+  border-radius: 0 8px 8px 0;
+  margin-bottom: 1.5rem;
+  font-size: 0.9rem;
+}
+
+.callout strong {
+  color: var(--accent);
+}
+
+.stepGrid {
+  display: grid;
+  grid-template-columns: 40px 1fr;
+  gap: 0 1rem;
+  margin-bottom: 1.5rem;
+}
+
+.stepNum {
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  color: var(--accent);
+  font-weight: 700;
+  padding-top: 0.15rem;
+}

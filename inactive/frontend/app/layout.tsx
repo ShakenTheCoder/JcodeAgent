@@ -5,8 +5,8 @@ import Header from '@/components/Header'
 import Footer from '@/components/Footer'
 
 export const metadata: Metadata = {
-  title: 'JCode — Local AI Coding Agent',
-  description: 'Build complete projects from a single prompt. Powered by Ollama, running 100% locally.',
+  title: 'JCode — Your Local, Unlimited & Private Software Engineer',
+  description: 'JCode is a local AI coding agent that iterates until your project works. 4 AI roles, zero cloud, 100% private.',
   keywords: 'AI coding agent, local AI, Ollama, code generation, project builder',
   authors: [{ name: 'Ioan Andrei' }],
   openGraph: {
@@ -30,14 +30,14 @@ export default function RootLayout({
   children: React.ReactNode
 }) {
   return (
-    <html lang="en" suppressHydrationWarning>
+    <html lang="en" data-theme="dark" suppressHydrationWarning>
       <head>
-        <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+        <link rel="icon" href="/JcodeLogo.ico" type="image/x-icon" />
       </head>
-      <body className="gradient-bg text-white min-h-screen">
+      <body>
         <ThemeProvider>
           <Header />
-          <main>{children}</main>
+          {children}
           <Footer />
         </ThemeProvider>
       </body>

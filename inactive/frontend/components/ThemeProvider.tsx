@@ -21,7 +21,9 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     const stored = localStorage.getItem('theme') as Theme | null
     if (stored) {
       setTheme(stored)
-      document.documentElement.classList.toggle('dark', stored === 'dark')
+      document.documentElement.setAttribute('data-theme', stored)
+    } else {
+      document.documentElement.setAttribute('data-theme', 'dark')
     }
   }, [])
 
@@ -29,7 +31,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     const newTheme = theme === 'dark' ? 'light' : 'dark'
     setTheme(newTheme)
     localStorage.setItem('theme', newTheme)
-    document.documentElement.classList.toggle('dark', newTheme === 'dark')
+    document.documentElement.setAttribute('data-theme', newTheme)
   }
 
   if (!mounted) return <>{children}</>
