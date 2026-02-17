@@ -1,8 +1,14 @@
 """
 JCode configuration — models, roles, paths, defaults.
 
-v0.3.0 — Smart Model Tiering + Parallel DAG execution.
-v0.7.0 — CWD-aware operation + git integration.
+v0.8.0 — Adaptive model tiering.
+
+Key design principles:
+  1. NEVER pull models during builds — only use what's locally installed.
+  2. Two tiers: FAST (7b) and DEFAULT (14b). No 32b by default.
+  3. Complexity detection is tight — simple tasks stay simple.
+  4. Escalation happens ONLY on failure, not preemptively.
+  5. Prefer the smallest model that can do the job.
 """
 
 from pathlib import Path
@@ -11,37 +17,36 @@ from enum import Enum
 
 
 # ═══════════════════════════════════════════════════════════════════
-# Smart Model Tiering
+# Adaptive Model Tiering
 # ═══════════════════════════════════════════════════════════════════
 #
-# Models are organized into 3 tiers:
-#   FAST   — small, low-latency (planning, lint-style review)
-#   MEDIUM — balanced (analysis, standard review)
-#   STRONG — largest, highest quality (code generation)
+# Only two tiers used by default (matches installer):
+#   FAST    — 7b models: quick generation, lint review, config files
+#   DEFAULT — 14b models: planning, code generation, deep review
 #
-# Each role picks a tier based on project complexity:
+# 32b models are NEVER required. If installed, they serve as
+# escalation targets when a file fails generation 3+ times.
 #
-#   Complexity  │ Planner │ Coder  │ Reviewer │ Analyzer
-#   ────────────┼─────────┼────────┼──────────┼─────────
-#   simple      │ fast    │ medium │ fast     │ fast
-#   medium      │ medium  │ strong │ medium   │ medium
-#   complex     │ strong  │ strong │ medium   │ strong
-#   large       │ strong  │ strong │ strong   │ strong
+#   Complexity  │ Planner    │ Coder   │ Reviewer │ Analyzer
+#   ────────────┼────────────┼─────────┼──────────┼─────────
+#   simple      │ fast       │ fast    │ fast     │ fast
+#   medium      │ default    │ default │ fast     │ fast
+#   complex     │ default    │ default │ default  │ default
 # ═══════════════════════════════════════════════════════════════════
 
 # ── Model Tiers ────────────────────────────────────────────────────
 MODEL_TIERS = {
     "fast": {
-        "reasoning": "deepseek-r1:7b",
+        "reasoning": "deepseek-r1:14b",
         "coding":    "qwen2.5-coder:7b",
     },
-    "medium": {
+    "default": {
         "reasoning": "deepseek-r1:14b",
         "coding":    "qwen2.5-coder:14b",
     },
     "strong": {
-        "reasoning": "deepseek-r1:32b",
-        "coding":    "qwen2.5-coder:32b",
+        "reasoning": "deepseek-r1:14b",
+        "coding":    "qwen2.5-coder:14b",
     },
 }
 
@@ -57,58 +62,119 @@ ROLE_FAMILY = {
 ROLE_TIER_MAP = {
     "simple": {
         "planner":  "fast",
-        "coder":    "medium",
+        "coder":    "default",   # Always use 14b coder — quality matters
         "reviewer": "fast",
         "analyzer": "fast",
     },
     "medium": {
-        "planner":  "medium",
-        "coder":    "strong",
-        "reviewer": "medium",
-        "analyzer": "medium",
+        "planner":  "default",
+        "coder":    "default",
+        "reviewer": "fast",
+        "analyzer": "fast",
     },
     "complex": {
-        "planner":  "strong",
-        "coder":    "strong",
-        "reviewer": "medium",
-        "analyzer": "strong",
+        "planner":  "default",
+        "coder":    "default",
+        "reviewer": "default",
+        "analyzer": "default",
     },
     "large": {
-        "planner":  "strong",
-        "coder":    "strong",
-        "reviewer": "strong",
-        "analyzer": "strong",
+        "planner":  "default",
+        "coder":    "default",
+        "reviewer": "default",
+        "analyzer": "default",
     },
 }
 
+# ── Locally installed models cache ─────────────────────────────────
+_local_models: set[str] | None = None
+
+
+def _get_local_models() -> set[str]:
+    """Return the set of models installed locally. Cached after first call."""
+    global _local_models
+    if _local_models is not None:
+        return _local_models
+    try:
+        import ollama as _ollama
+        response = _ollama.list()
+        # Handle both old and new ollama API formats
+        models = response.get("models", []) if isinstance(response, dict) else []
+        if not models and hasattr(response, 'models'):
+            models = response.models or []
+        names = set()
+        for m in models:
+            name = m.get("name", "") if isinstance(m, dict) else getattr(m, "model", "")
+            if name:
+                # Normalize: "qwen2.5-coder:14b" and "qwen2.5-coder:14b-..." both match "qwen2.5-coder:14b"
+                names.add(name.split("-q")[0] if "-q" in name else name)
+        _local_models = names
+    except Exception:
+        _local_models = set()
+    return _local_models
+
+
+def _is_model_local(model: str) -> bool:
+    """Check if a model is installed locally."""
+    local = _get_local_models()
+    return model in local
+
 
 def get_model_for_role(role: str, complexity: str = "medium") -> str:
-    """Resolve the concrete model name for a role at a given complexity."""
-    tier = ROLE_TIER_MAP.get(complexity, ROLE_TIER_MAP["medium"]).get(role, "medium")
+    """Resolve the concrete model name for a role at a given complexity.
+    Falls back to whatever is locally available — never triggers a pull."""
+    tier = ROLE_TIER_MAP.get(complexity, ROLE_TIER_MAP["medium"]).get(role, "default")
     family = ROLE_FAMILY.get(role, "coding")
-    return MODEL_TIERS[tier][family]
+    model = MODEL_TIERS[tier][family]
+
+    # If the resolved model isn't local, fall back through tiers
+    if not _is_model_local(model):
+        # Try all tiers in preference order for this family
+        for fallback_tier in ("default", "fast", "strong"):
+            fallback = MODEL_TIERS[fallback_tier][family]
+            if _is_model_local(fallback):
+                return fallback
+        # Last resort: return whatever we have, ollama_client will handle it
+    return model
+
+
+def get_escalation_model(role: str) -> str | None:
+    """Get a stronger model for escalation (only if locally available).
+    Returns None if no stronger model is available."""
+    family = ROLE_FAMILY.get(role, "coding")
+    # Check if a 32b model is available locally
+    candidates = [
+        "qwen2.5-coder:32b" if family == "coding" else "deepseek-r1:32b",
+    ]
+    for model in candidates:
+        if _is_model_local(model):
+            return model
+    return None
 
 
 def get_all_required_models(complexity: str = "medium") -> list[str]:
-    """Return the unique set of models needed for a given complexity level."""
+    """Return the unique set of models needed for a given complexity level.
+    Only returns models that are locally installed."""
     models = set()
     tier_map = ROLE_TIER_MAP.get(complexity, ROLE_TIER_MAP["medium"])
     for role, tier in tier_map.items():
         family = ROLE_FAMILY[role]
-        models.add(MODEL_TIERS[tier][family])
+        model = MODEL_TIERS[tier][family]
+        if _is_model_local(model):
+            models.add(model)
     return sorted(models)
 
 
 # ── Legacy constants (kept for backward compat, resolved dynamically) ──
-PLANNER_MODEL = MODEL_TIERS["medium"]["reasoning"]
-CODER_MODEL = MODEL_TIERS["medium"]["coding"]
-REVIEWER_MODEL = MODEL_TIERS["medium"]["coding"]
-ANALYZER_MODEL = MODEL_TIERS["medium"]["reasoning"]
+PLANNER_MODEL = MODEL_TIERS["default"]["reasoning"]
+CODER_MODEL = MODEL_TIERS["default"]["coding"]
+REVIEWER_MODEL = MODEL_TIERS["fast"]["coding"]
+ANALYZER_MODEL = MODEL_TIERS["default"]["reasoning"]
 
 
 # ── Generation Parameters ──────────────────────────────────────────
-BASE_PLANNER_CTX = 16384
-BASE_CODER_CTX = 16384
+BASE_PLANNER_CTX = 8192
+BASE_CODER_CTX = 8192
 
 PLANNER_OPTIONS = {
     "temperature": 0.6,
@@ -125,21 +191,21 @@ CODER_OPTIONS = {
 REVIEWER_OPTIONS = {
     "temperature": 0.3,
     "top_p": 0.9,
-    "num_ctx": BASE_CODER_CTX,
+    "num_ctx": 4096,           # Reviews don't need big context
 }
 
 ANALYZER_OPTIONS = {
     "temperature": 0.2,
     "top_p": 0.9,
-    "num_ctx": BASE_PLANNER_CTX,
+    "num_ctx": 4096,
 }
 
 # Context window scaling
 COMPLEXITY_SCALING = {
-    "simple": 1.0,      # 16k
-    "medium": 1.5,      # 24k
-    "complex": 2.0,     # 32k
-    "large": 2.5,       # 40k
+    "simple": 1.0,      # 8k
+    "medium": 1.5,      # 12k
+    "complex": 2.0,     # 16k
+    "large": 3.0,       # 24k
 }
 
 # ── Worker Pool Settings ───────────────────────────────────────────
@@ -249,29 +315,37 @@ def detect_complexity(plan) -> str:
     When called with a string prompt (before planning), returns a
     keyword-based estimate.  When called with the full plan dict,
     uses structural analysis.
+
+    The default is SIMPLE — complexity only goes up when there is
+    strong evidence of a complex system (databases, auth, multi-service).
     """
     if not plan:
-        return "medium"
+        return "simple"
 
     # ── String prompt (pre-plan estimate) ──────────────────────────
     if isinstance(plan, str):
         prompt_lower = plan.lower()
         score = 0
-        if any(kw in prompt_lower for kw in ("sql", "database", "postgres", "mongo", "redis")):
+
+        # Only count truly complex signals
+        if any(kw in prompt_lower for kw in ("database", "postgres", "mongo", "mysql", "redis", "sqlite")):
+            score += 2
+        if any(kw in prompt_lower for kw in ("auth", "jwt", "oauth", "login", "signup", "session")):
+            score += 2
+        if any(kw in prompt_lower for kw in ("docker", "ci/cd", "deploy", "kubernetes", "microservice")):
+            score += 2
+        if any(kw in prompt_lower for kw in ("graphql", "grpc", "websocket", "real-time")):
             score += 1
-        if any(kw in prompt_lower for kw in ("api", "rest", "graphql", "grpc")):
+        if any(kw in prompt_lower for kw in ("full-stack", "fullstack", "backend and frontend")):
             score += 1
-        if any(kw in prompt_lower for kw in ("auth", "jwt", "oauth", "login")):
-            score += 1
-        if any(kw in prompt_lower for kw in ("docker", "ci", "deploy", "kubernetes")):
-            score += 1
-        if any(kw in prompt_lower for kw in ("test", "pytest", "jest")):
-            score += 1
-        if len(prompt_lower.split()) > 40:
-            score += 1
-        if score <= 1:
+
+        # Simple keywords that actively REDUCE complexity
+        if any(kw in prompt_lower for kw in ("simple", "basic", "minimal", "small", "quick", "tiny", "hello world")):
+            score -= 2
+
+        if score <= 0:
             return "simple"
-        elif score <= 3:
+        elif score <= 2:
             return "medium"
         return "complex"
 
@@ -281,31 +355,31 @@ def detect_complexity(plan) -> str:
 
     score = 0
 
-    if file_count <= 3:
-        score += 1
-    elif file_count <= 10:
+    # File count is the primary signal
+    if file_count <= 5:
+        score += 0  # simple
+    elif file_count <= 12:
         score += 2
-    elif file_count <= 20:
+    elif file_count <= 25:
         score += 3
     else:
         score += 4
 
-    if any(kw in tech_lower for kw in ("sql", "database", "postgres", "mongo", "redis")):
-        score += 1
-    if any(kw in tech_lower for kw in ("api", "rest", "graphql", "grpc")):
-        score += 1
+    # Tech stack signals
+    if any(kw in tech_lower for kw in ("database", "postgres", "mongo", "mysql", "redis")):
+        score += 2
     if any(kw in tech_lower for kw in ("auth", "jwt", "oauth", "session")):
-        score += 1
-    if any("test" in str(f).lower() for f in plan.get("structure", {}).keys()):
         score += 1
     if any(kw in tech_lower for kw in ("docker", "ci", "deploy")):
         score += 1
+    if any(kw in tech_lower for kw in ("react", "next", "vue", "angular", "svelte")):
+        score += 1
 
-    if score <= 2:
+    if score <= 1:
         return "simple"
-    elif score <= 4:
+    elif score <= 3:
         return "medium"
-    elif score <= 6:
+    elif score <= 5:
         return "complex"
     return "large"
 

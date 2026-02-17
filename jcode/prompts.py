@@ -51,6 +51,21 @@ RULES:
 - Include config files (package.json, requirements.txt, etc.).
 - Keep it practical — don't over-engineer.
 - depends_on uses task IDs (integers), not file names.
+
+ARCHITECTURE RULES (CRITICAL — follow strictly):
+- Use FREE, no-signup APIs when possible: open-meteo.com for weather, \
+  restcountries.com for countries, jsonplaceholder.typicode.com for test data, \
+  api.dictionaryapi.dev for definitions, wttr.in for weather.
+- NEVER create a config.json or .env file with API key placeholders for simple \
+  projects. If a free API exists, use it directly.
+- NEVER create separate config files for simple projects. Inline configuration.
+- For frontend-only projects (HTML/CSS/JS), put ALL JavaScript in a single file \
+  unless the project is complex.
+- MINIMIZE file count. A simple project should have 1-3 files max. Don't create \
+  unnecessary files.
+- Minimize dependencies between tasks. If files are independent, set depends_on=[].
+- For web apps: prefer a single index.html with inline CSS and JS for simple \
+  projects. Only split into separate files for medium+ complexity.
 """
 
 PLANNER_REFINE = """\
@@ -88,6 +103,22 @@ RULES:
 - Follow the tech stack and conventions described.
 - Include all necessary imports.
 - If fixing an existing file, output the FULL corrected file.
+
+QUALITY RULES (CRITICAL):
+- Code MUST work out of the box. No placeholder API keys, no TODO stubs.
+- Use FREE APIs that require no signup: open-meteo.com, wttr.in, \
+  restcountries.com, jsonplaceholder.typicode.com, api.dictionaryapi.dev.
+- NEVER use localStorage to read config files. Use fetch() for JSON files \
+  or inline the configuration.
+- NEVER output placeholder values like 'YOUR_API_KEY_HERE' or empty strings \
+  for API endpoints.
+- All fetch calls MUST have error handling (try/catch or .catch).
+- All UI must show loading states and error states.
+- For HTML: include the title matching the project name, proper meta tags.
+- For CSS: use modern CSS (flexbox/grid), make it responsive, use a clean \
+  color scheme.
+- For JS: use async/await, handle all error cases, update DOM with real data.
+- Test the code mentally before outputting. Trace through it. Will it work?
 """
 
 CODER_TASK = """\

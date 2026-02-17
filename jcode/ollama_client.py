@@ -1,11 +1,13 @@
 """
 Ollama client wrapper — talks to the local Ollama server.
 
-v2.0 — Smart model tiering + thread-safe parallel generation.
+v3.0 — Adaptive model tiering. NEVER pulls models during builds.
 
-Supports all 4 roles: planner, coder, reviewer, analyzer.
-Dynamically selects model based on role + project complexity.
-Thread-safe for parallel file generation via WorkerPool.
+Key rules:
+  1. Only use locally installed models
+  2. If a model isn't available, fall back to what IS available
+  3. Never block a build with a model download
+  4. Escalation models are optional — only used if already installed
 """
 
 from __future__ import annotations
@@ -18,7 +20,7 @@ from rich.console import Console
 from jcode.config import (
     PLANNER_MODEL, CODER_MODEL, REVIEWER_MODEL, ANALYZER_MODEL,
     PLANNER_OPTIONS, CODER_OPTIONS, REVIEWER_OPTIONS, ANALYZER_OPTIONS,
-    get_model_for_role, get_all_required_models,
+    get_model_for_role, get_all_required_models, _is_model_local,
 )
 
 console = Console()
@@ -32,12 +34,12 @@ _stream_lock = threading.Lock()
 
 
 def _ensure_model(model: str) -> None:
-    """Pull the model if it isn't already downloaded. Thread-safe."""
+    """Check that the model is available. NEVER pulls — warns and falls back instead."""
     with _verified_lock:
         if model in _verified_models:
             return
 
-    # Check outside the lock (network call)
+    # Check if available locally
     try:
         ollama.show(model)
         with _verified_lock:
@@ -46,25 +48,23 @@ def _ensure_model(model: str) -> None:
     except ollama.ResponseError:
         pass
 
-    # Pull needed
-    console.print(f"[yellow]Model [bold]{model}[/bold] not found locally. Pulling…[/yellow]")
-    progress = console.status(f"[cyan]Downloading {model}…[/cyan]")
-    progress.start()
-    try:
-        ollama.pull(model)
-    finally:
-        progress.stop()
-    console.print(f"[green]Model {model} ready.[/green]")
-
+    # Model not available — warn but don't pull
+    console.print(f"[yellow]⚠ Model {model} not installed. Using fallback.[/yellow]")
     with _verified_lock:
-        _verified_models.add(model)
+        _verified_models.add(model)  # Don't keep checking
 
 
 def ensure_models_for_complexity(complexity: str) -> None:
-    """Pre-pull all models required for a given complexity level."""
+    """Verify all models needed for a complexity level are available.
+    Reports missing models but NEVER pulls them during builds."""
     models = get_all_required_models(complexity)
+    missing = []
     for model in models:
-        _ensure_model(model)
+        if not _is_model_local(model):
+            missing.append(model)
+    if missing:
+        console.print(f"[yellow]⚠ Missing models: {', '.join(missing)}. Using available models.[/yellow]")
+        console.print(f"[dim]  Install with: ollama pull {' && ollama pull '.join(missing)}[/dim]")
 
 
 def check_ollama_running() -> bool:

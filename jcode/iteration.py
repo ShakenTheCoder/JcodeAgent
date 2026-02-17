@@ -59,9 +59,11 @@ def execute_plan(ctx: ContextManager, output_dir: Path) -> bool:
       1. Compute waves (topological layers of the DAG)
       2. For each wave:
          a. Generate ALL files in parallel
-         b. Review ALL files in parallel
+         b. Review (only for medium+ complexity)
          c. Verify ALL files
          d. Fix only failures (sequentially)
+
+    Simple projects skip review entirely for speed.
     """
     ctx.state.output_dir = output_dir
     ensure_project_dir(output_dir)
@@ -78,11 +80,12 @@ def execute_plan(ctx: ContextManager, output_dir: Path) -> bool:
 
     # Show model tiering info
     complexity = ctx.get_complexity()
+    skip_review = complexity == "simple"
+
     _log("ENGINE", f"Complexity: [bold]{complexity}[/bold]")
-    _log("ENGINE", f"Planner model:  {get_model_for_role('planner', complexity)}")
     _log("ENGINE", f"Coder model:    {get_model_for_role('coder', complexity)}")
-    _log("ENGINE", f"Reviewer model: {get_model_for_role('reviewer', complexity)}")
-    _log("ENGINE", f"Analyzer model: {get_model_for_role('analyzer', complexity)}")
+    if not skip_review:
+        _log("ENGINE", f"Reviewer model: {get_model_for_role('reviewer', complexity)}")
 
     # Compute waves for display
     try:
@@ -95,7 +98,10 @@ def execute_plan(ctx: ContextManager, output_dir: Path) -> bool:
         _log("WARNING", f"DAG issue: {e} — falling back to sequential")
         all_waves = [[t] for t in dag]
 
-    _log("ENGINE", "Pipeline: Generate ‖ → Review ‖ → Verify → Fix failures")
+    if skip_review:
+        _log("ENGINE", "Pipeline: Generate ‖ → Verify → Fix (review skipped for simple)")
+    else:
+        _log("ENGINE", "Pipeline: Generate ‖ → Review ‖ → Verify → Fix failures")
 
     # -- Install deps before building
     install_dependencies(output_dir, ctx.state.tech_stack)
@@ -128,11 +134,12 @@ def execute_plan(ctx: ContextManager, output_dir: Path) -> bool:
             _log("PHASE A", f"Generating {len(ready)} file(s) in parallel")
             _parallel_generate(ready, ctx, output_dir, pool)
 
-            # Phase B: Review all generated files in parallel
-            generated = [t for t in ready if t.status == TaskStatus.GENERATED]
-            if generated:
-                _log("PHASE B", f"Reviewing {len(generated)} file(s) in parallel")
-                _parallel_review(generated, ctx, output_dir, pool)
+            # Phase B: Review (skip for simple projects — just verify)
+            if not skip_review:
+                generated = [t for t in ready if t.status == TaskStatus.GENERATED]
+                if generated:
+                    _log("PHASE B", f"Reviewing {len(generated)} file(s) in parallel")
+                    _parallel_review(generated, ctx, output_dir, pool)
 
             # Phase C: Verify all files
             _log("PHASE C", "Verifying files (static analysis)")
