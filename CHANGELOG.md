@@ -1,5 +1,28 @@
 # Changelog
 
+## v0.9.7 — Model Pull UX Improvements
+
+Bugfix & UX: Model pulling now shows real progress (bytes downloaded, transfer speed), handles Ctrl+C gracefully, and gives better size estimates.
+
+### Model Pull Improvements
+- **Real progress tracking**: Shows bytes downloaded and transfer speed (was stuck at 0%)
+- **Graceful cancellation**: Press Ctrl+C during download to skip a model and continue with fallback
+- **Accurate size estimates**: 70B models → 40GB, 32B → 20GB, 14B → 9GB, 7B → 5GB (was flat 12GB estimate)
+- **Better feedback**: "Skipped — will use fallback" when cancelled, "may take 10-30min per model" warning
+- **Tip shown**: User is informed they can press Ctrl+C to skip slow downloads
+
+### Technical Changes
+- `pull_model()` now uses `Live` progress with `DownloadColumn` and `TransferSpeedColumn`
+- Catches `KeyboardInterrupt` at two levels (inner loop + outer function) for clean exit
+- Returns `False` on cancellation instead of crashing
+- `ensure_models_for_complexity()` handles partial success (some models pulled, some skipped)
+
+### Files Changed
+- `jcode/config.py` — Rewritten `pull_model()` with better progress tracking and KeyboardInterrupt handling
+- `jcode/ollama_client.py` — Improved size estimates and user feedback in `ensure_models_for_complexity()`
+
+---
+
 ## v0.9.6 — Interactive Model Pulling
 
 Feature: JCode now detects missing ideal models and offers to pull them before starting a build. Users can choose to download recommended models or continue with fallback models.

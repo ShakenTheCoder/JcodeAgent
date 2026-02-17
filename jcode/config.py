@@ -296,45 +296,58 @@ def pull_model(model_name: str) -> bool:
     """Pull a model from Ollama registry.
     
     Returns:
-        True if successful, False if failed.
+        True if successful, False if failed or cancelled.
     """
     try:
         import ollama as _ollama
         from rich.console import Console
-        from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn
+        from rich.live import Live
+        from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, DownloadColumn, TransferSpeedColumn
         
         console = Console()
         
-        with Progress(
+        progress = Progress(
             SpinnerColumn(),
             TextColumn("[bold blue]{task.description}"),
             BarColumn(),
-            TaskProgressColumn(),
+            DownloadColumn(),
+            TransferSpeedColumn(),
             console=console,
-        ) as progress:
-            task = progress.add_task(f"Pulling {model_name}...", total=100)
-            
-            # Stream the pull progress
-            for resp in _ollama.pull(model_name, stream=True):
-                if isinstance(resp, dict):
-                    status = resp.get("status", "")
-                    if "digest" in resp:
-                        # Has progress info
-                        completed = resp.get("completed", 0)
-                        total = resp.get("total", 1)
-                        if total > 0:
-                            pct = int((completed / total) * 100)
-                            progress.update(task, completed=pct, description=f"Pulling {model_name} - {status}")
-                    else:
-                        # Status only
-                        progress.update(task, description=f"Pulling {model_name} - {status}")
-            
-            progress.update(task, completed=100, description=f"✓ Pulled {model_name}")
+        )
         
-        # Refresh cache after successful pull
-        refresh_local_models()
-        return True
+        task = progress.add_task(f"Pulling {model_name}...", total=None)
         
+        try:
+            with Live(progress, console=console, refresh_per_second=10):
+                last_status = ""
+                for resp in _ollama.pull(model_name, stream=True):
+                    if isinstance(resp, dict):
+                        status = resp.get("status", "")
+                        
+                        # Update status text if changed
+                        if status and status != last_status:
+                            last_status = status
+                            progress.update(task, description=f"[bold blue]{model_name}[/bold blue] - {status}")
+                        
+                        # Update progress if available
+                        if "completed" in resp and "total" in resp:
+                            completed = resp.get("completed", 0)
+                            total = resp.get("total", 1)
+                            if total > 0:
+                                progress.update(task, completed=completed, total=total)
+            
+            console.print(f"[green]✓ Pulled {model_name}[/green]")
+            refresh_local_models()
+            return True
+            
+        except KeyboardInterrupt:
+            console.print(f"\n[yellow]⚠ Cancelled pulling {model_name}[/yellow]")
+            return False
+        
+    except KeyboardInterrupt:
+        from rich.console import Console
+        Console().print(f"\n[yellow]⚠ Cancelled pulling {model_name}[/yellow]")
+        return False
     except Exception as e:
         from rich.console import Console
         Console().print(f"[red]✗ Failed to pull {model_name}: {e}[/red]")

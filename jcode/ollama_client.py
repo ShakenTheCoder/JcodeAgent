@@ -151,12 +151,27 @@ def ensure_models_for_complexity(
     console.print(table)
     console.print()
     
-    # Calculate total size to download
+    # Calculate total size to download (improved estimates based on model sizes)
     model_names = [model for model, _ in missing]
-    size_estimate = len(model_names) * 12  # Rough estimate: 12GB per model average
+    size_estimate = 0
+    for model_name in model_names:
+        # Rough size estimates based on common models
+        if "70b" in model_name or "72b" in model_name:
+            size_estimate += 40  # 70B models ~40GB
+        elif "32b" in model_name or "30b" in model_name:
+            size_estimate += 20  # 32B models ~20GB
+        elif "20b" in model_name or "24b" in model_name:
+            size_estimate += 12  # 20B models ~12GB
+        elif "14b" in model_name:
+            size_estimate += 9   # 14B models ~9GB
+        elif "7b" in model_name or "8b" in model_name:
+            size_estimate += 5   # 7B models ~5GB
+        else:
+            size_estimate += 10  # Default estimate
     
     console.print(f"  [dim]Missing models: {', '.join(model_names)}[/dim]")
-    console.print(f"  [dim]Estimated download: ~{size_estimate}GB[/dim]")
+    console.print(f"  [dim]Estimated download: ~{size_estimate}GB (may take 10-30min per model)[/dim]")
+    console.print(f"  [dim]Tip: Press Ctrl+C during download to skip a model[/dim]")
     console.print()
     
     # Ask permission
@@ -174,12 +189,12 @@ def ensure_models_for_complexity(
             if pull_model(model_name):
                 success_count += 1
             else:
-                console.print(f"[yellow]  Will use fallback for {roles}[/yellow]")
+                console.print(f"[yellow]  Skipped — will use fallback for {roles}[/yellow]")
         
         if success_count > 0:
             console.print(f"\n[green]✓ Pulled {success_count}/{len(missing)} model(s)[/green]")
             refresh_local_models()
-        else:
+        elif success_count == 0:
             console.print("\n[yellow]No models were pulled. Continuing with fallbacks.[/yellow]")
     else:
         console.print("[dim]Continuing with fallback models...[/dim]")
