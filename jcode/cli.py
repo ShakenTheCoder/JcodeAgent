@@ -924,6 +924,20 @@ def _cmd_chat(ctx: ContextManager, project_dir: Path, user_message: str) -> None
     console.print()
 
 
+def _strip_content_fences(content: str) -> str:
+    """Strip markdown code fences from file content.
+
+    Models often wrap file content in ```lang ... ``` despite instructions.
+    This removes them so the raw content gets written to disk.
+    """
+    content = content.strip()
+    # Strip opening fence: ```json, ```javascript, ```python, ```, etc.
+    content = re.sub(r"^```\w*\s*\n?", "", content)
+    # Strip closing fence (at end)
+    content = re.sub(r"\n?```\s*$", "", content)
+    return content.strip()
+
+
 def _apply_file_changes(response: str, project_dir: Path, ctx: ContextManager) -> int:
     """
     Parse ===FILE: path=== ... ===END=== blocks from response and write files.
@@ -939,7 +953,7 @@ def _apply_file_changes(response: str, project_dir: Path, ctx: ContextManager) -
     )
     for rel_path, content in file_blocks:
         rel_path = rel_path.strip()
-        content = content.strip()
+        content = _strip_content_fences(content)
         if rel_path and content:
             full_path = project_dir / rel_path
             full_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1021,10 +1035,17 @@ def _apply_run_commands(response: str, project_dir: Path) -> int:
                     err = result.stderr.strip()[:500] if result.stderr else ""
                     if err:
                         _log("EXEC", f"  ⚠ exit {result.returncode}: {err[:200]}")
+                    else:
+                        _log("EXEC", f"  ⚠ exit {result.returncode}")
+                    # Stop executing remaining commands on failure
+                    _log("EXEC", "  Stopping — fix the error before continuing")
+                    break
             except subprocess.TimeoutExpired:
                 _log("EXEC", f"  ⚠ Timed out (120s): {cmd}")
+                break
             except Exception as e:
                 _log("EXEC", f"  ✗ Failed: {e}")
+                break
 
     return commands_run
 
@@ -1147,6 +1168,8 @@ def _detect_run_command(project_dir: Path) -> tuple[list[str] | None, Path | Non
                     return ["npm", "start"], search_dir
                 elif "dev" in scripts:
                     return ["npm", "run", "dev"], search_dir
+            except json.JSONDecodeError:
+                _log("RUN", f"⚠ {pkg_json} has invalid JSON — cannot detect run command")
             except Exception:
                 pass
 
@@ -1157,7 +1180,13 @@ def _detect_run_command(project_dir: Path) -> tuple[list[str] | None, Path | Non
         if index_html.exists():
             return ["open", str(index_html)], loc
 
-    # 4. Any .py file
+    # 4. Node.js: common entry files (fallback when package.json has no scripts)
+    for entry in ("app.js", "index.js", "server.js", "main.js"):
+        candidate = project_dir / entry
+        if candidate.exists():
+            return ["node", str(candidate)], project_dir
+
+    # 5. Any .py file
     py_files = list(project_dir.glob("*.py"))
     if py_files:
         return ["python3", str(py_files[0])], project_dir

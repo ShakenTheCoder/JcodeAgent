@@ -1,5 +1,31 @@
 # Changelog
 
+## v0.9.3 — Fence Stripping & Execution Safety
+
+Bugfix: models wrap `===FILE:===` content in markdown fences (` ```json ``` `), corrupting files like `package.json`. Commands now stop on failure instead of blindly continuing.
+
+### Markdown Fence Stripping
+- New `_strip_content_fences()` strips ` ```lang ``` ` from file content inside `===FILE:===` blocks
+- Handles `json`, `javascript`, `python`, `typescript`, and bare ` ``` ` fences
+- Applied automatically in `_apply_file_changes()` before writing to disk
+- Fixes: `package.json` written with backtick fences → `npm install EJSONPARSE`
+
+### Command Execution: Stop on Failure
+- `_apply_run_commands()` now stops executing remaining `===RUN:===` commands when one fails
+- Prevents cascading failures (e.g., `npm start` running after `npm install` fails)
+- Shows "Stopping — fix the error before continuing" message
+- `===BACKGROUND:===` commands are not affected (they don't block)
+
+### Run Command Detection Improvements
+- Added Node.js entry file fallback: `app.js`, `index.js`, `server.js`, `main.js` detected even without `package.json`
+- `_detect_run_command` now logs a warning when `package.json` has invalid JSON instead of silently failing
+- Detection order: Python entry → `package.json` scripts → HTML → Node.js entry → any `.py` file
+
+### Files Changed
+- `jcode/cli.py` — `_strip_content_fences()`, stop-on-failure in `_apply_run_commands()`, Node.js fallback in `_detect_run_command()`, JSON parse error logging
+
+---
+
 ## v0.9.2 — Autonomous Execution
 
 Critical fix: agent mode now actually executes commands and builds projects end-to-end instead of just printing instructions.
