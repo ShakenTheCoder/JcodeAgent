@@ -395,9 +395,12 @@ def _repl(
 
     while True:
         try:
-            mode_indicator = "⚡" if mode == "agent" else "💬"
+            if mode == "agent":
+                mode_display = "[magenta](Mode: agentic)[/magenta]"
+            else:
+                mode_display = "[blue](Mode: chat)[/blue]"
             user_input = pt_prompt(
-                f"{mode_indicator} {proj_name}> ", history=history,
+                f"{mode_display} {proj_name}> ", history=history,
             ).strip()
         except (EOFError, KeyboardInterrupt):
             console.print("\n[dim]Goodbye.[/dim]")
