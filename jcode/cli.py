@@ -1,14 +1,13 @@
 """
-JCode CLI v9.0 — Intelligent multi-model orchestrator.
+JCode CLI v0.9.8 — Intelligent multi-model orchestrator.
 
 JCode lives inside your project directory. Two modes:
-  AGENT — autonomous: plan → research → generate → review → verify → commit
-  CHAT  — conversational: ask questions, discuss, get explanations
+  AGENTIC (default) — every message triggers autonomous action:
+    classify → research → plan → generate → auto-run → auto-fix → commit
+  CHAT — conversational: reasoning, websearch, explanations — no file changes
 
-Switch modes instantly by typing "agent" or "chat".
-
-Task classification: complexity (heavy/medium/simple) × size (large/medium/small)
-→ routes each role to the best available model automatically.
+Switch modes with /agentic or /chat.
+Slash commands (/help, /run, /commit, etc.) work in both modes.
 """
 
 from __future__ import annotations
@@ -47,7 +46,7 @@ from jcode.prompts import (
     CHAT_SYSTEM, CHAT_CONTEXT, AGENTIC_SYSTEM, AGENTIC_TASK,
     RESEARCH_SYSTEM, RESEARCH_TASK, PLANNER_RESEARCH_CONTEXT,
 )
-from jcode.intent import Intent, classify_intent, intent_label
+from jcode.intent import _BUILD_PATTERNS
 from jcode.scanner import scan_project, detect_project_type, scan_files
 from jcode import git_manager
 
@@ -66,39 +65,44 @@ BANNER = r"""
  ╚════╝  ╚═════╝ ╚═════╝ ╚═════╝ ╚══════╝"""
 
 HELP_TEXT = """
-[bold white]Commands[/bold white]
+[bold white]JCode — Two Modes[/bold white]
+
+  [bold cyan]⚡ Agentic[/bold cyan] (default)  Every message triggers autonomous action.
+                       JCode classifies, plans, generates code, runs it,
+                       and auto-fixes errors — fully autonomous.
+
+  [bold cyan]💬 Chat[/bold cyan]               Conversational mode. JCode reasons, searches
+                       the web, explains — but does NOT modify files.
+
+[bold white]Slash Commands[/bold white]  (work in both modes)
 
   [bold cyan]Modes[/bold cyan]
-  [cyan]agent[/cyan]              Switch to agent mode (autonomous changes)
-  [cyan]chat[/cyan]               Switch to chat mode (conversation only)
-
-  [bold cyan]Build & Modify[/bold cyan]
-  [cyan]build[/cyan] <prompt>     Plan and build a new project from scratch
-  Just type naturally  "fix the login bug", "add dark mode", etc.
-
-  [bold cyan]Git[/bold cyan]
-  [cyan]commit[/cyan] [message]   Stage all changes and commit
-  [cyan]push[/cyan]              Push to remote
-  [cyan]pull[/cyan]              Pull from remote
-  [cyan]status[/cyan]            Show git status
-  [cyan]log[/cyan]               Show recent commits
-  [cyan]diff[/cyan]              Show uncommitted changes
-  [cyan]git remote[/cyan] <url>  Set up GitHub remote
+  [cyan]/agentic[/cyan]           Switch to agentic mode
+  [cyan]/chat[/cyan]              Switch to chat mode
 
   [bold cyan]Project[/bold cyan]
-  [cyan]run[/cyan]               Detect and run the project
-  [cyan]test[/cyan]              Run project tests
-  [cyan]files[/cyan]             List all project files
-  [cyan]tree[/cyan]              Show directory tree
-  [cyan]plan[/cyan]              Show current build plan
-  [cyan]models[/cyan]            Show available models and routing
+  [cyan]/run[/cyan]               Detect and run the project
+  [cyan]/test[/cyan]              Run project tests
+  [cyan]/files[/cyan]             List all project files
+  [cyan]/tree[/cyan]              Show directory tree
+  [cyan]/plan[/cyan]              Show current build plan
+  [cyan]/models[/cyan]            Show available models and routing
+
+  [bold cyan]Git[/bold cyan]
+  [cyan]/commit[/cyan] [message]  Stage all changes and commit
+  [cyan]/push[/cyan]              Push to remote
+  [cyan]/pull[/cyan]              Pull from remote
+  [cyan]/status[/cyan]            Show git status
+  [cyan]/log[/cyan]               Show recent commits
+  [cyan]/diff[/cyan]              Show uncommitted changes
+  [cyan]/remote[/cyan] <url>      Set up GitHub remote
 
   [bold cyan]Utility[/bold cyan]
-  [cyan]version[/cyan]            Show JCode version
-  [cyan]update[/cyan]             Update JCode to latest version
-  [cyan]clear[/cyan]              Clear the terminal
-  [cyan]help[/cyan]               Show this help
-  [cyan]quit[/cyan]               Exit
+  [cyan]/version[/cyan]           Show JCode version
+  [cyan]/update[/cyan]            Update JCode to latest version
+  [cyan]/clear[/cyan]             Clear the terminal
+  [cyan]/help[/cyan]              Show this help
+  [cyan]/quit[/cyan]              Exit
 """
 
 
@@ -266,12 +270,12 @@ def main():
     # Normalize legacy "agentic" to "agent"
     if mode == "agentic":
         mode = "agent"
-    console.print(f"  [cyan]Mode:[/cyan] {mode}  [dim](type 'agent' or 'chat' to switch)[/dim]")
+    console.print(f"  [cyan]Mode:[/cyan] {mode}  [dim](/agentic or /chat to switch)[/dim]")
 
     # -- Hint
     console.print()
     console.print(
-        "  Type naturally or use [cyan]'help'[/cyan] for commands.\n"
+        "  Type naturally or use [cyan]/help[/cyan] for commands.\n"
     )
 
     # -- Main REPL
@@ -337,7 +341,42 @@ def _check_permissions(settings_mgr: SettingsManager) -> None:
 
 
 # ═══════════════════════════════════════════════════════════════════
-# Main REPL — intent-driven, single loop
+# Build-detection heuristic for agentic mode
+# ═══════════════════════════════════════════════════════════════════
+
+def _looks_like_build(user_input: str) -> bool:
+    """Detect if user wants to build a full project from scratch.
+
+    When True, agentic mode routes to the full build pipeline
+    (classify → research → plan → generate → review → verify → fix → run).
+    """
+    lower = user_input.lower().strip()
+
+    # Standard build patterns from intent module
+    for pattern in _BUILD_PATTERNS:
+        if re.search(pattern, lower):
+            return True
+
+    # App-type names strongly imply building from scratch
+    _APP_SIGNALS = [
+        r"\b(?:tinder|uber|airbnb|instagram|twitter|whatsapp|spotify|netflix|"
+        r"amazon|slack|discord|reddit|youtube|facebook|linkedin|trello|notion|"
+        r"shopify|etsy|doordash|grubhub|venmo|paypal)\b.*\b(?:for|like|clone)\b",
+        r"\b(?:for|like|clone)\b.*\b(?:tinder|uber|airbnb|instagram|twitter|"
+        r"whatsapp|spotify|netflix|amazon|slack|discord|reddit|youtube|facebook|"
+        r"linkedin|trello|notion|shopify|etsy|doordash|grubhub|venmo|paypal)\b",
+        r"\b(?:dating|ride.?sharing|food.?delivery|social.?media|e.?commerce|"
+        r"marketplace|messaging|streaming)\s+(?:app|platform|site|website|service)\b",
+    ]
+    for pattern in _APP_SIGNALS:
+        if re.search(pattern, lower):
+            return True
+
+    return False
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Main REPL — two modes, slash commands
 # ═══════════════════════════════════════════════════════════════════
 
 def _repl(
@@ -347,7 +386,11 @@ def _repl(
     mode: str,
     history: InMemoryHistory,
 ) -> None:
-    """Single REPL loop — routes user input by intent."""
+    """Two-mode REPL: agentic (default) acts on every message, chat reasons without changes.
+
+    Slash commands (/help, /run, /commit, etc.) work identically in both modes.
+    Everything else is routed to the active mode handler.
+    """
     proj_name = ctx.state.name or project_dir.name
 
     while True:
@@ -364,201 +407,160 @@ def _repl(
         if not user_input:
             continue
 
-        # Classify intent
-        intent, content = classify_intent(user_input)
+        # ── Slash commands (work in both modes) ──────────────────
+        if user_input.startswith("/"):
+            cmd = user_input[1:].strip()
+            lower_cmd = cmd.lower()
 
-        # Route by intent
-        if intent == Intent.QUIT:
-            _auto_save(ctx, project_dir)
-            console.print("  [dim]Goodbye.[/dim]\n")
-            break
-
-        elif intent == Intent.MODE:
-            # Instant mode switching — just type "agent" or "chat"
-            lower = user_input.lower().strip()
-            # Extract mode name from various forms
-            new_mode = None
-            if lower in ("agent", "agentic"):
-                new_mode = "agent"
-            elif lower == "chat":
-                new_mode = "chat"
-            elif lower.startswith("mode ") or lower.startswith("switch to ") or lower.startswith("switch "):
-                # Extract from "mode agent", "switch to chat", etc.
-                parts = lower.replace("switch to ", "").replace("switch ", "").replace("mode ", "").strip()
-                if parts in ("agent", "agentic"):
-                    new_mode = "agent"
-                elif parts == "chat":
-                    new_mode = "chat"
-
-            if new_mode:
-                mode = new_mode
+            # Mode switching
+            if lower_cmd in ("agentic", "agent"):
+                mode = "agent"
                 settings_mgr.settings.default_mode = mode
                 settings_mgr.save_settings()
-                emoji = "⚡" if mode == "agent" else "💬"
-                console.print(f"  {emoji} [cyan]Switched to {mode} mode[/cyan]")
-            else:
-                console.print(f"  [cyan]Current mode:[/cyan] {mode}")
-                console.print(f"  [dim]Type 'agent' or 'chat' to switch[/dim]")
+                console.print("  ⚡ [cyan]Switched to agentic mode[/cyan]")
+                continue
+            elif lower_cmd == "chat":
+                mode = "chat"
+                settings_mgr.settings.default_mode = mode
+                settings_mgr.save_settings()
+                console.print("  💬 [cyan]Switched to chat mode[/cyan]")
+                continue
 
-        elif intent == Intent.NAVIGATE:
-            lower = user_input.lower().strip()
-            _handle_navigate(lower, ctx, project_dir, settings_mgr, mode)
+            # Quit
+            elif lower_cmd in ("quit", "exit", "q"):
+                _auto_save(ctx, project_dir)
+                console.print("  [dim]Goodbye.[/dim]\n")
+                break
 
-        elif intent == Intent.BUILD:
-            prompt = content if content else user_input
-            ctx, project_dir = _cmd_build(prompt, ctx, project_dir, settings_mgr)
-            proj_name = ctx.state.name or project_dir.name
-
-        elif intent == Intent.MODIFY:
-            if mode == "agent":
-                _cmd_agentic(ctx, project_dir, user_input, settings_mgr)
-            else:
-                _cmd_chat(ctx, project_dir, user_input)
-
-        elif intent == Intent.CHAT:
-            # In agent mode, treat chat as agentic action (autonomous)
-            if mode == "agent":
-                _cmd_agentic(ctx, project_dir, user_input, settings_mgr)
-            else:
-                _cmd_chat(ctx, project_dir, user_input)
-
-        elif intent == Intent.GIT:
-            _handle_git(user_input, content, ctx, project_dir, settings_mgr)
-
-        elif intent == Intent.RUN:
-            lower = user_input.lower().strip()
-            if lower == "rebuild":
+            # Project commands
+            elif lower_cmd == "run":
+                _cmd_run(ctx, project_dir, settings_mgr)
+                continue
+            elif lower_cmd in ("test", "tests"):
+                _cmd_test(project_dir, ctx)
+                continue
+            elif lower_cmd == "rebuild":
                 _log("REBUILD", "Re-running build pipeline")
                 execute_plan(ctx, project_dir)
                 _auto_save(ctx, project_dir)
                 _git_auto_commit(project_dir, settings_mgr, "rebuild project")
-            elif lower in ("test", "tests"):
-                _cmd_test(project_dir, ctx)
+                continue
+            elif lower_cmd == "files":
+                _cmd_files(project_dir)
+                continue
+            elif lower_cmd == "tree":
+                _cmd_tree(ctx, project_dir)
+                continue
+            elif lower_cmd == "plan":
+                _cmd_plan(ctx)
+                continue
+            elif lower_cmd == "models":
+                _cmd_models()
+                continue
+
+            # Git commands
+            elif lower_cmd in ("commit", "save"):
+                _ensure_git_repo(project_dir)
+                ok, result = git_manager.auto_commit(project_dir)
+                if ok:
+                    _log("GIT", f"Committed: {result}")
+                else:
+                    console.print(f"  [dim]{result}[/dim]")
+                continue
+            elif lower_cmd.startswith("commit "):
+                _ensure_git_repo(project_dir)
+                message = cmd.split(None, 1)[1].strip() if " " in cmd else "update"
+                ok, result = git_manager.commit(project_dir, message)
+                if ok:
+                    _log("GIT", f"Committed ({result}): {message}")
+                else:
+                    console.print(f"  [dim]{result}[/dim]")
+                continue
+            elif lower_cmd == "push":
+                _ensure_git_repo(project_dir)
+                ok, result = git_manager.push(project_dir)
+                if ok:
+                    _log("GIT", result)
+                else:
+                    console.print(f"  [yellow]{result}[/yellow]")
+                    if "No configured push destination" in result or "no upstream" in result.lower():
+                        console.print("  [dim]Set a remote: /remote <github-url>[/dim]")
+                continue
+            elif lower_cmd == "pull":
+                _ensure_git_repo(project_dir)
+                ok, result = git_manager.pull(project_dir)
+                if ok:
+                    _log("GIT", f"Pulled: {result}")
+                    _scan_project_files(ctx, project_dir)
+                else:
+                    console.print(f"  [yellow]{result}[/yellow]")
+                continue
+            elif lower_cmd == "status":
+                git_manager.print_status(project_dir)
+                continue
+            elif lower_cmd == "log":
+                _ensure_git_repo(project_dir)
+                git_manager.print_log(project_dir)
+                continue
+            elif lower_cmd == "diff":
+                _ensure_git_repo(project_dir)
+                diff_output = git_manager.diff(project_dir)
+                if diff_output:
+                    console.print(Panel(diff_output, title="Git Diff", border_style="dim"))
+                else:
+                    console.print("  [dim]No uncommitted changes[/dim]")
+                continue
+            elif lower_cmd.startswith("remote "):
+                _ensure_git_repo(project_dir)
+                url = cmd.split(None, 1)[1].strip()
+                if git_manager.setup_github_remote(project_dir, url):
+                    _log("GIT", f"Remote set to: {url}")
+                continue
+
+            # Utility
+            elif lower_cmd == "help":
+                console.print(HELP_TEXT, highlight=False)
+                continue
+            elif lower_cmd == "clear":
+                console.clear()
+                continue
+            elif lower_cmd == "version":
+                console.print(f"\n  [bold cyan]JCode[/bold cyan] [white]v{__version__}[/white]")
+                console.print(f"  [dim]https://github.com/ShakenTheCoder/JcodeAgent[/dim]\n")
+                continue
+            elif lower_cmd == "update":
+                _cmd_update()
+                continue
+            elif lower_cmd == "uninstall":
+                _cmd_uninstall(settings_mgr)
+                continue
             else:
-                _cmd_run(ctx, project_dir, settings_mgr)
+                console.print(f"  [dim]Unknown command: /{lower_cmd}[/dim]")
+                console.print(f"  [dim]Type /help for available commands[/dim]")
+                continue
+
+        # ── Mode-based routing (non-slash input) ─────────────────
+        if mode == "agent":
+            # Agentic mode: every message triggers action
+            if _looks_like_build(user_input):
+                # Full build pipeline for new-project requests
+                ctx, project_dir = _cmd_build(user_input, ctx, project_dir, settings_mgr)
+                proj_name = ctx.state.name or project_dir.name
+            else:
+                # Autonomous modify/create/fix/run
+                _cmd_agentic(ctx, project_dir, user_input, settings_mgr)
+        else:
+            # Chat mode: reason, explain, search — no file changes
+            _cmd_chat(ctx, project_dir, user_input)
 
 
-# ═══════════════════════════════════════════════════════════════════
-# Navigation handler
-# ═══════════════════════════════════════════════════════════════════
-
-def _handle_navigate(
-    cmd: str,
-    ctx: ContextManager,
-    project_dir: Path,
-    settings_mgr: SettingsManager,
-    mode: str,
-) -> None:
-    """Handle navigation/utility commands."""
-    if cmd == "help":
-        console.print(HELP_TEXT, highlight=False)
-    elif cmd == "clear":
-        console.clear()
-    elif cmd == "files":
-        _cmd_files(project_dir)
-    elif cmd == "tree":
-        _cmd_tree(ctx, project_dir)
-    elif cmd == "plan":
-        _cmd_plan(ctx)
-    elif cmd == "models":
-        _cmd_models()
-    elif cmd == "version":
-        console.print(f"\n  [bold cyan]JCode[/bold cyan] [white]v{__version__}[/white]")
-        console.print(f"  [dim]https://github.com/ShakenTheCoder/JcodeAgent[/dim]\n")
-    elif cmd == "update":
-        _cmd_update()
-    elif cmd == "uninstall":
-        _cmd_uninstall(settings_mgr)
-    elif cmd == "status":
-        git_manager.print_status(project_dir)
-
-
-# ═══════════════════════════════════════════════════════════════════
-# Git handler
-# ═══════════════════════════════════════════════════════════════════
-
-def _handle_git(
-    raw_input: str,
-    content: str,
-    ctx: ContextManager,
-    project_dir: Path,
-    settings_mgr: SettingsManager,
-) -> None:
-    """Handle git-related commands."""
-    lower = raw_input.lower().strip()
-
-    # Ensure git is available
+def _ensure_git_repo(project_dir: Path) -> None:
+    """Ensure git is available and the project has a repo."""
     if not git_manager.ensure_git():
         return
-
-    # Initialize repo if needed
     if not git_manager.is_git_repo(project_dir):
         _log("GIT", "Initializing git repository")
         git_manager.init_repo(project_dir, initial_commit=True)
-
-    if lower in ("commit", "save"):
-        ok, result = git_manager.auto_commit(project_dir)
-        if ok:
-            _log("GIT", f"Committed: {result}")
-        else:
-            console.print(f"  [dim]{result}[/dim]")
-
-    elif lower.startswith("commit "):
-        message = raw_input.split(None, 1)[1].strip()
-        ok, result = git_manager.commit(project_dir, message)
-        if ok:
-            _log("GIT", f"Committed ({result}): {message}")
-        else:
-            console.print(f"  [dim]{result}[/dim]")
-
-    elif lower == "push":
-        ok, result = git_manager.push(project_dir)
-        if ok:
-            _log("GIT", result)
-        else:
-            console.print(f"  [yellow]{result}[/yellow]")
-            if "No configured push destination" in result or "no upstream" in result.lower():
-                console.print(f"  [dim]Set a remote: git remote <github-url>[/dim]")
-
-    elif lower == "pull":
-        ok, result = git_manager.pull(project_dir)
-        if ok:
-            _log("GIT", f"Pulled: {result}")
-            _scan_project_files(ctx, project_dir)
-        else:
-            console.print(f"  [yellow]{result}[/yellow]")
-
-    elif lower == "status":
-        git_manager.print_status(project_dir)
-
-    elif lower == "log":
-        git_manager.print_log(project_dir)
-
-    elif lower == "diff":
-        diff_output = git_manager.diff(project_dir)
-        if diff_output:
-            console.print(Panel(diff_output, title="Git Diff", border_style="dim"))
-        else:
-            console.print("  [dim]No uncommitted changes[/dim]")
-
-    elif lower.startswith("git remote ") or lower.startswith("remote "):
-        url = raw_input.split(None, 2)[-1].strip()
-        if git_manager.setup_github_remote(project_dir, url):
-            _log("GIT", f"Remote set to: {url}")
-        else:
-            console.print(f"  [yellow]Failed to set remote[/yellow]")
-
-    elif lower.startswith("clone "):
-        url = raw_input.split(None, 1)[1].strip()
-        _log("GIT", f"Cloning {url}")
-        ok, cloned_path = git_manager.clone(url, project_dir)
-        if ok and cloned_path:
-            _log("GIT", f"Cloned to {cloned_path}")
-        else:
-            console.print(f"  [yellow]Clone failed[/yellow]")
-
-    else:
-        console.print("  [dim]Git commands: commit, push, pull, status, log, diff, git remote <url>[/dim]")
 
 
 def _git_auto_commit(
@@ -719,7 +721,7 @@ def _cmd_build(
                         f"Command: {' '.join(run_cmd)}\n"
                         f"Fix the code. Output corrected files with ===FILE:=== format."
                     )
-                    _cmd_chat(ctx, project_dir, fix_prompt)
+                    _run_fix_prompt(ctx, project_dir, fix_prompt)
                     _install_deps_if_needed(project_dir)
 
                     exit_code, run_output = _run_and_capture(run_cmd, run_cwd)
@@ -747,9 +749,25 @@ def _cmd_agentic(
     user_request: str,
     settings_mgr: SettingsManager,
 ) -> None:
-    """Autonomous modification: scan → reason → modify files → commit."""
+    """Autonomous modification: classify → scan → reason → modify files → auto-run → auto-fix → commit."""
 
-    # Refresh context from disk
+    # ── Step 1: Classify the task so we use the right models ──
+    classification = classify_task(prompt=user_request)
+    complexity_str = classification.complexity.value
+    size_str = classification.size.value
+
+    console.print(f"\n  [dim]Classification:[/dim] [bold]{classification.label}[/bold]"
+                  f"  [dim](complexity={complexity_str}, size={size_str})[/dim]")
+
+    model_plan = describe_model_plan(complexity_str, size_str)
+    console.print(f"  [dim]Models:[/dim]")
+    for role, model in model_plan.items():
+        console.print(f"    [dim]{role:>8}:[/dim]  [cyan]{model}[/cyan]")
+
+    # Pre-check models are available (offer to pull if missing)
+    ensure_models_for_complexity(complexity_str, size_str)
+
+    # ── Step 2: Refresh context from disk ──
     _scan_project_files(ctx, project_dir)
 
     # Build file contents string
@@ -771,7 +789,7 @@ def _cmd_agentic(
         else:
             git_status = "Clean working tree"
 
-    # Build the prompt
+    # ── Step 3: Build prompt and call model with proper routing ──
     full_prompt = AGENTIC_TASK.format(
         project_summary=project_summary,
         file_contents=file_contents,
@@ -787,9 +805,12 @@ def _cmd_agentic(
         {"role": "user", "content": full_prompt},
     ]
 
-    response = call_model("coder", messages, stream=True)
+    response = call_model(
+        "coder", messages, stream=True,
+        complexity=complexity_str, size=size_str,
+    )
 
-    # Apply file changes first (files before commands)
+    # ── Step 4: Apply file changes (files before commands) ──
     files_written = _apply_file_changes(response, project_dir, ctx)
 
     # Execute any ===RUN:=== or ===BACKGROUND:=== commands
@@ -819,11 +840,80 @@ def _cmd_agentic(
     ctx.add_chat("assistant", response[:3000])
     _auto_save(ctx, project_dir)
 
+    # ── Step 5: Auto-run the project after code changes ──
+    if files_written > 0:
+        _agentic_auto_run(ctx, project_dir, settings_mgr, user_request,
+                          complexity_str, size_str)
+
     # Auto-commit after agentic changes
     if files_written > 0:
         _git_auto_commit(project_dir, settings_mgr, user_request[:60])
 
     console.print()
+
+
+def _agentic_auto_run(
+    ctx: ContextManager,
+    project_dir: Path,
+    settings_mgr: SettingsManager,
+    user_request: str,
+    complexity: str,
+    size: str,
+) -> None:
+    """Auto-run after agentic code generation: install deps → detect → run → auto-fix loop."""
+    console.print()
+    _log("AUTO-RUN", "Attempting to run the project after code changes...")
+
+    # Install dependencies first
+    _install_deps_if_needed(project_dir)
+
+    # Detect how to run
+    run_cmd, run_cwd = _detect_run_command(project_dir)
+    if not run_cmd:
+        _log("AUTO-RUN", "Could not detect run command — skipping auto-run")
+        return
+
+    MAX_AUTO_FIX = 3
+    for attempt in range(1, MAX_AUTO_FIX + 1):
+        _log("AUTO-RUN", f"{' '.join(run_cmd)} (in {run_cwd.name})")
+        exit_code, output = _run_and_capture(run_cmd, run_cwd)
+
+        if exit_code == 0:
+            _log("AUTO-RUN", "Project ran successfully ✓")
+            return
+
+        if exit_code == -2:
+            # User pressed Ctrl+C — don't auto-fix, just return
+            return
+
+        _log("AUTO-RUN", f"Process exited with code {exit_code}")
+
+        if attempt >= MAX_AUTO_FIX:
+            _log("AUTO-FIX", f"Could not auto-fix after {MAX_AUTO_FIX} attempts")
+            console.print("  [dim]You can describe the issue and JCode will help fix it.[/dim]")
+            return
+
+        # Auto-fix: feed the error back to the model
+        _log("AUTO-FIX", f"Attempt {attempt}/{MAX_AUTO_FIX} — analyzing runtime error...")
+        error_msg = output[-3000:] if len(output) > 3000 else output
+
+        fix_prompt = (
+            f"The project failed to run after your last changes.\n\n"
+            f"EXACT error output:\n```\n{error_msg}\n```\n\n"
+            f"Command: {' '.join(run_cmd)}\n"
+            f"Working directory: {run_cwd}\n\n"
+            f"Read the error carefully. Find and fix the broken file(s). "
+            f"Output COMPLETE corrected files using ===FILE: path=== ... ===END=== format. "
+            f"If dependencies are missing, add ===RUN: npm install xyz=== or similar.\n"
+            f"Do NOT give advice — just fix the code."
+        )
+
+        _run_fix_prompt(ctx, project_dir, fix_prompt)
+
+        # Re-install deps in case fix added new packages
+        _install_deps_if_needed(project_dir)
+
+        _log("AUTO-FIX", "Re-running after fix...")
 
 
 def _scan_project_files(ctx: ContextManager, project_dir: Path) -> None:
@@ -844,16 +934,54 @@ def _scan_project_files(ctx: ContextManager, project_dir: Path) -> None:
 
 
 # ═══════════════════════════════════════════════════════════════════
-# Chat — conversational mode
+# Fix prompt helper — used by /run auto-fix and agentic auto-fix
+# ═══════════════════════════════════════════════════════════════════
+
+def _run_fix_prompt(ctx: ContextManager, project_dir: Path, fix_prompt: str) -> int:
+    """Call the model with a fix prompt and apply file changes + run commands.
+
+    Returns number of files written. Used internally by auto-fix loops —
+    this DOES modify files (unlike _cmd_chat which is read-only).
+    """
+    _scan_project_files(ctx, project_dir)
+
+    file_parts = []
+    for path, content in sorted(ctx.state.files.items()):
+        trimmed = content[:6000]
+        file_parts.append(f"### {path}\n```\n{trimmed}\n```")
+    file_contents = "\n\n".join(file_parts) if file_parts else "(no files yet)"
+
+    full_prompt = f"{fix_prompt}\n\n## All Project Files\n{file_contents}"
+
+    _log("FIX", "Generating fix...")
+    messages = [
+        {"role": "system", "content": AGENTIC_SYSTEM},
+        {"role": "user", "content": full_prompt},
+    ]
+    response = call_model("coder", messages, stream=True)
+
+    files_written = _apply_file_changes(response, project_dir, ctx)
+    cmds_run = _apply_run_commands(response, project_dir)
+
+    if files_written > 0:
+        _log("FIX", f"Fixed {files_written} file(s)")
+    if cmds_run > 0:
+        _log("FIX", f"Ran {cmds_run} command(s)")
+
+    return files_written
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Chat — conversational mode (read-only)
 # ═══════════════════════════════════════════════════════════════════
 
 def _cmd_chat(ctx: ContextManager, project_dir: Path, user_message: str) -> None:
     """
-    Send a message to the agent within the project context.
-    The agent decides whether to modify files or just discuss.
+    Chat mode: reasoning, explanations, web search — but NO file modifications.
+    The model can see all project files for context but cannot change them.
     """
 
-    # Refresh file contents from disk
+    # Refresh file contents from disk (read-only context)
     _scan_project_files(ctx, project_dir)
 
     # Build file contents string (all files, capped per file)
@@ -891,25 +1019,13 @@ def _cmd_chat(ctx: ContextManager, project_dir: Path, user_message: str) -> None
 
     response = call_model("coder", messages, stream=True)
 
-    # Apply any file modifications found in the response
-    files_written = _apply_file_changes(response, project_dir, ctx)
-
-    # Execute any ===RUN:=== or ===BACKGROUND:=== commands
-    commands_run = _apply_run_commands(response, project_dir)
-
-    # Display the text response (strip file and command blocks from display)
-    display_text = response
-    if files_written > 0 or commands_run > 0:
-        display_text = re.sub(
-            r"===FILE:.*?===END===", "", response, flags=re.DOTALL
-        ).strip()
-        display_text = re.sub(
-            r"===(RUN|BACKGROUND):\s*.+?===", "", display_text, flags=re.IGNORECASE
-        ).strip()
-        if files_written > 0:
-            _log("APPLIED", f"Updated {files_written} file(s)")
-        if commands_run > 0:
-            _log("APPLIED", f"Executed {commands_run} command(s)")
+    # Display the response (strip any ===FILE:=== or ===RUN:=== blocks — chat mode is read-only)
+    display_text = re.sub(
+        r"===FILE:.*?===END===", "", response, flags=re.DOTALL
+    ).strip()
+    display_text = re.sub(
+        r"===(RUN|BACKGROUND):\s*.+?===", "", display_text, flags=re.IGNORECASE
+    ).strip()
 
     if display_text:
         console.print()
@@ -1107,7 +1223,7 @@ def _cmd_run(ctx: ContextManager, project_dir: Path, settings_mgr: SettingsManag
             f"Output the corrected files using ===FILE:=== format. "
             f"Do NOT give advice or suggestions — just fix the code."
         )
-        _cmd_chat(ctx, project_dir, fix_prompt)
+        _run_fix_prompt(ctx, project_dir, fix_prompt)
 
         _install_deps_if_needed(project_dir)
 
@@ -1157,8 +1273,11 @@ def _detect_run_command(project_dir: Path) -> tuple[list[str] | None, Path | Non
             if candidate.exists():
                 return ["python3", str(candidate)], project_dir / subdir
 
-    # 2. Node: package.json with start/dev script
-    for search_dir in [project_dir] + [project_dir / d for d in ("backend", "server", "api", "frontend", "client")]:
+    # 2. Node: package.json with start/dev script (search root + common subdirs)
+    node_search_dirs = [project_dir] + [
+        project_dir / d for d in ("backend", "server", "api", "frontend", "client", "app")
+    ]
+    for search_dir in node_search_dirs:
         pkg_json = search_dir / "package.json"
         if pkg_json.exists():
             try:
@@ -1173,20 +1292,41 @@ def _detect_run_command(project_dir: Path) -> tuple[list[str] | None, Path | Non
             except Exception:
                 pass
 
-    # 3. HTML: look for index.html
+    # 3. Node.js: common entry files in root and subdirs
+    #    (fallback when package.json has no scripts or doesn't exist)
+    node_entries = ("app.js", "index.js", "server.js", "main.js")
+    for entry in node_entries:
+        candidate = project_dir / entry
+        if candidate.exists():
+            return ["node", str(candidate)], project_dir
+    for subdir in ("server", "backend", "src", "api"):
+        sub_path = project_dir / subdir
+        if sub_path.is_dir():
+            for entry in node_entries:
+                candidate = sub_path / entry
+                if candidate.exists():
+                    return ["node", str(candidate)], sub_path
+
+    # 4. HTML: look for index.html
     for loc in [project_dir, project_dir / "public", project_dir / "frontend",
                 project_dir / "client", project_dir / "dist"]:
         index_html = loc / "index.html"
         if index_html.exists():
             return ["open", str(index_html)], loc
 
-    # 4. Node.js: common entry files (fallback when package.json has no scripts)
-    for entry in ("app.js", "index.js", "server.js", "main.js"):
-        candidate = project_dir / entry
-        if candidate.exists():
-            return ["node", str(candidate)], project_dir
+    # 5. package.json exists but has NO scripts — try `node` on main field
+    for search_dir in node_search_dirs:
+        pkg_json = search_dir / "package.json"
+        if pkg_json.exists():
+            try:
+                pkg = json.loads(pkg_json.read_text())
+                main_file = pkg.get("main")
+                if main_file and (search_dir / main_file).exists():
+                    return ["node", str(search_dir / main_file)], search_dir
+            except Exception:
+                pass
 
-    # 5. Any .py file
+    # 6. Any .py file
     py_files = list(project_dir.glob("*.py"))
     if py_files:
         return ["python3", str(py_files[0])], project_dir

@@ -1,5 +1,43 @@
 # Changelog
 
+## v0.9.8 — Simplified Two-Mode Architecture
+
+Major refactor: JCode now has a clean two-mode architecture. No more intent classification — every message goes straight to the active mode handler.
+
+### Two Modes
+- **⚡ Agentic (default)**: Every message triggers autonomous action — classify, generate, auto-run, auto-fix. No ambiguity.
+- **💬 Chat**: Conversational mode with reasoning, web search, explanations — but NO file modifications. Fully read-only.
+- Switch with `/agentic` or `/chat`
+
+### Slash Commands
+- All utility commands now use `/` prefix: `/run`, `/commit`, `/push`, `/pull`, `/status`, `/log`, `/diff`, `/remote`, `/files`, `/tree`, `/plan`, `/models`, `/help`, `/version`, `/update`, `/clear`, `/quit`
+- Slash commands work identically in both modes
+
+### Agentic Intelligence
+- **Task classification on every request**: `classify_task()` runs before every agentic action — selects optimal models based on complexity × size
+- **Model routing**: Shows classification label and routed models for transparency
+- **Build detection**: Prompts like "build a tinder for linkedin" auto-route to the full build pipeline (classify → research → plan → generate → review → verify → fix → run)
+- **Auto-run after code generation**: After writing files, JCode auto-detects and runs the project
+- **Auto-fix loop**: If run fails, JCode feeds the error back to the model and retries (up to 3 attempts)
+
+### Run Detection Improvements
+- Node.js entry files (`app.js`, `index.js`, `server.js`) now detected in subdirectories (`server/`, `backend/`, `src/`, `api/`)
+- `package.json` `main` field used as fallback when no scripts are defined
+- More subdirectories searched for `package.json` (`app/` added)
+
+### Architecture Cleanup
+- Removed intent classification system from REPL (no more `classify_intent()` calls)
+- Removed `_handle_navigate()` and `_handle_git()` — logic inlined into slash command handler
+- Added `_run_fix_prompt()` helper — shared by `/run` auto-fix, build post-fix, and agentic auto-fix
+- Chat mode (`_cmd_chat`) is now strictly read-only — strips any ===FILE:=== or ===RUN:=== blocks
+
+### Files Changed
+- `jcode/cli.py` — Major refactor: new REPL with slash commands, `_cmd_agentic()` with classification + auto-run, `_agentic_auto_run()`, `_run_fix_prompt()`, read-only `_cmd_chat()`, improved `_detect_run_command()`
+- `jcode/__init__.py` — Version bump to 0.9.8
+- `pyproject.toml` — Version bump to 0.9.8
+
+---
+
 ## v0.9.7 — Model Pull UX Improvements
 
 Bugfix & UX: Model pulling now shows real progress (bytes downloaded, transfer speed), handles Ctrl+C gracefully, and gives better size estimates.

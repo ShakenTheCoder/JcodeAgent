@@ -175,6 +175,12 @@ _RUN_PATTERNS: list[str] = [
     r"\bstart\s+(?:the\s+)?(?:project|app|server|application)\b",
     r"\bpython\b.*\brun\b",
     r"\bdeploy\b",
+    r"\bhelp\s+(?:me\s+)?run\b",
+    r"\brun\s+(?:the\s+)?(?:project|app|server|application|code)\b",
+    r"\brun\s+(?:this|it)\s+(?:project|app|for me)?\b",
+    r"\bcan\s+you\s+run\b",
+    r"\bplease\s+run\b",
+    r"\brun\s+(?:this|it)\s+for\s+me\b",
 ]
 
 
