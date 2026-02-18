@@ -396,11 +396,9 @@ def _repl(
     while True:
         try:
             if mode == "agent":
-                # Magenta: \033[35m
-                mode_display = "\033[35m(Mode: agentic)\033[0m"
+                mode_display = "-AGENT-"
             else:
-                # Blue: \033[34m
-                mode_display = "\033[34m(Mode: chat)\033[0m"
+                mode_display = "-CHAT-"
             user_input = pt_prompt(
                 f"{mode_display} {proj_name}> ", history=history,
             ).strip()
