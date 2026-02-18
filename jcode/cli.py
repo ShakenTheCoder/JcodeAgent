@@ -824,30 +824,36 @@ def _cmd_agentic(
     # Execute any ===RUN:=== or ===BACKGROUND:=== commands
     commands_run = _apply_run_commands(response, project_dir)
 
-    # Display response text (strip file and command blocks)
+    # ── Build clean display text: always strip file/command blocks ──
+    # We strip regardless of files_written count — prevents raw code spilling into panel
+    # even when the parser matched a different format from what the stripper expects.
     display_text = response
-    if files_written > 0 or commands_run > 0:
-        # Strip standard ===FILE:...===END=== blocks
-        display_text = re.sub(
-            r"===FILE:.*?===END===", "", display_text, flags=re.DOTALL
-        ).strip()
-        # Strip ===FILE: path=== followed by ```...``` (no ===END===)
-        display_text = re.sub(
-            r"===FILE:\s*.+?\s*===\s*\n```\w*\s*\n.*?\n```",
-            "", display_text, flags=re.DOTALL
-        ).strip()
-        # Strip ===FILE: path=== followed by bare content until next marker or end
-        display_text = re.sub(
-            r"===FILE:\s*.+?\s*===\s*\n.*?(?=\n===(?:FILE|RUN|BACKGROUND):|\Z)",
-            "", display_text, flags=re.DOTALL
-        ).strip()
-        display_text = re.sub(
-            r"===(RUN|BACKGROUND):\s*.+?===", "", display_text, flags=re.IGNORECASE
-        ).strip()
-        if files_written > 0:
-            _log("APPLIED", f"Modified {files_written} file(s)")
-        if commands_run > 0:
-            _log("APPLIED", f"Executed {commands_run} command(s)")
+    # Remove ===FILE:...===END=== blocks
+    display_text = re.sub(r"===FILE:.*?===END===", "", display_text, flags=re.DOTALL)
+    # Remove ===FILE: path=== + ``` block
+    display_text = re.sub(
+        r"===FILE:\s*.+?\s*===[ \t]*\n```\w*[ \t]*\n.*?\n```",
+        "", display_text, flags=re.DOTALL
+    )
+    # Remove remaining ===FILE: path=== blocks (raw content fallback)
+    display_text = re.sub(
+        r"===FILE:\s*.+?\s*===[ \t]*\n.*?(?=\n===(?:FILE|RUN|BACKGROUND)|$)",
+        "", display_text, flags=re.DOTALL
+    )
+    # Remove markdown headings that are just file paths (### FILE: path)
+    display_text = re.sub(
+        r"\n#{1,4}\s+(?:FILE[:\s]+)?[a-zA-Z0-9_/. -]+\.[a-zA-Z0-9]+[ \t]*\n```\w*[ \t]*\n.*?\n```",
+        "", display_text, flags=re.DOTALL
+    )
+    # Remove ===RUN:=== and ===BACKGROUND:=== lines
+    display_text = re.sub(r"===(RUN|BACKGROUND):\s*.+?===", "", display_text, flags=re.IGNORECASE)
+    # Collapse multiple blank lines
+    display_text = re.sub(r"\n{3,}", "\n\n", display_text).strip()
+
+    if files_written > 0:
+        _log("APPLIED", f"Modified {files_written} file(s)")
+    if commands_run > 0:
+        _log("APPLIED", f"Executed {commands_run} command(s)")
 
     if display_text:
         console.print()
@@ -1076,113 +1082,106 @@ def _strip_content_fences(content: str) -> str:
 def _apply_file_changes(response: str, project_dir: Path, ctx: ContextManager) -> int:
     """
     Parse file blocks from model response and write files.
-    Handles multiple formats that models produce:
+    Handles every format that local models produce:
 
-    FORMAT 1 (ideal):   ===FILE: path=== ... ===END===
-    FORMAT 2 (common):  ===FILE: path=== ```lang ... ```  (no ===END===)
-    FORMAT 3 (fallback): ### path  OR  **path**  followed by ```lang ... ```
+    FORMAT 1 (ideal):    ===FILE: path=== ... ===END===
+    FORMAT 2 (common):   ===FILE: path=== ```lang ... ```  (no ===END===)
+    FORMAT 4 (fallback): ===FILE: path=== raw content until next marker
+    FORMAT 3 (heading):  ### path  OR  ### FILE: path  OR  **path**  + code block
+    FORMAT 5 (#### FILE):  #### FILE: path  OR  #### path  + code block
 
     Returns count of files written.
     """
     files_written = 0
     written_paths: set[str] = set()
 
-    # ── FORMAT 1: ===FILE: path=== ... ===END=== (strict) ────────
-    file_blocks = re.findall(
-        r"===FILE:\s*(.+?)\s*===\s*\n(.*?)===END===",
-        response,
-        re.DOTALL,
-    )
-    for rel_path, content in file_blocks:
-        rel_path = rel_path.strip()
+    # ── Pre-process: normalise ===END=== that ended up inside a ``` block ──
+    # The model sometimes wraps the entire file block in a markdown fence, so you get:
+    # ```\n===FILE: x===\ncontent\n===END===\n```
+    # Strip the outer fence, keep the inner markers.
+    response = re.sub(r"^```\w*\s*\n(===(?:FILE|END))", r"\1", response, flags=re.MULTILINE)
+    response = re.sub(r"\n===END===\n```", "\n===END===", response)
+
+    # ── Helper: write one file ────────────────────────────────────
+    def _write(rel_path: str, content: str) -> bool:
+        rel_path = rel_path.strip().lstrip("/")
         content = _strip_content_fences(content)
-        if rel_path and content.strip():
-            full_path = project_dir / rel_path
-            full_path.parent.mkdir(parents=True, exist_ok=True)
-            full_path.write_text(content)
-            ctx.record_file(rel_path, content)
-            console.print(f"           [dim]wrote[/dim] [white]{rel_path}[/white]")
-            files_written += 1
-            written_paths.add(rel_path)
+        # Remove stray ===END=== lines that leaked into content
+        content = re.sub(r"^===END===$", "", content, flags=re.MULTILINE).strip()
+        if not rel_path or not content:
+            return False
+        if rel_path in written_paths:
+            return False
+        # Sanity: must look like a valid file path
+        if len(rel_path) > 200 or "\n" in rel_path:
+            return False
+        full_path = project_dir / rel_path
+        full_path.parent.mkdir(parents=True, exist_ok=True)
+        full_path.write_text(content)
+        ctx.record_file(rel_path, content)
+        console.print(f"           [dim]wrote[/dim] [white]{rel_path}[/white]")
+        written_paths.add(rel_path)
+        return True
 
-    # ── FORMAT 2: ===FILE: path=== followed by ``` block (no ===END===) ──
-    # Match ===FILE: path=== then a markdown code block
-    format2_pattern = re.compile(
-        r"===FILE:\s*(.+?)\s*===\s*\n"       # ===FILE: path===
-        r"```\w*\s*\n"                         # opening fence
-        r"(.*?)"                                # content
-        r"\n```",                               # closing fence
+    # ── FORMAT 1: ===FILE: path=== ... ===END=== ─────────────────
+    for rel_path, content in re.findall(
+        r"===FILE:\s*(.+?)\s*===[ \t]*\n(.*?)===END===",
+        response, re.DOTALL
+    ):
+        if _write(rel_path, content):
+            files_written += 1
+
+    # ── FORMAT 2: ===FILE: path=== followed by ``` block ─────────
+    fmt2 = re.compile(
+        r"===FILE:\s*(.+?)\s*===[ \t]*\n"
+        r"```\w*[ \t]*\n"
+        r"(.*?)"
+        r"\n```",
         re.DOTALL,
     )
-    for m in format2_pattern.finditer(response):
-        rel_path = m.group(1).strip()
-        content = m.group(2).strip()
-        if rel_path and content and rel_path not in written_paths:
-            full_path = project_dir / rel_path
-            full_path.parent.mkdir(parents=True, exist_ok=True)
-            full_path.write_text(content)
-            ctx.record_file(rel_path, content)
-            console.print(f"           [dim]wrote[/dim] [white]{rel_path}[/white]")
+    for m in fmt2.finditer(response):
+        if _write(m.group(1), m.group(2)):
             files_written += 1
-            written_paths.add(rel_path)
 
-    # ── FORMAT 3: Markdown heading/bold with file path + code block ──
-    # Matches: ### main.py  OR  ### `main.py`  OR  **main.py**  OR  ### Modified `main.py`
-    # followed by ```lang ... ```
-    format3_pattern = re.compile(
-        r"(?:^|\n)"                                        # line start
-        r"(?:#{1,4}\s+(?:Modified\s+|Updated\s+|File[:\s]+)?"  # ### Modified / ### File:
-        r"[`\"']?([a-zA-Z0-9_/.\\-]+\.\w+)[`\"']?"       # filename with extension
-        r"|\*\*([a-zA-Z0-9_/.\\-]+\.\w+)\*\*)"            # OR **filename.ext**
-        r"\s*\n+"                                           # newlines
-        r"```\w*\s*\n"                                      # opening fence
-        r"(.*?)"                                            # content
-        r"\n```",                                           # closing fence
-        re.DOTALL,
-    )
-    for m in format3_pattern.finditer(response):
-        rel_path = (m.group(1) or m.group(2) or "").strip()
-        content = m.group(3).strip()
-        if rel_path and content and rel_path not in written_paths:
-            # Validate it looks like a real file path (has extension, reasonable length)
-            if "." in rel_path and len(rel_path) < 200 and len(content) > 10:
-                full_path = project_dir / rel_path
-                full_path.parent.mkdir(parents=True, exist_ok=True)
-                full_path.write_text(content)
-                ctx.record_file(rel_path, content)
-                console.print(f"           [dim]wrote[/dim] [white]{rel_path}[/white]")
-                files_written += 1
-                written_paths.add(rel_path)
-
-    # ── FORMAT 4: ===FILE: path=== followed by raw content (no fences, no ===END===) ──
-    # Last resort: split on ===FILE: markers and take content between them
+    # ── FORMAT 4: ===FILE: path=== + raw content (ultimate fallback) ─
     if not written_paths:
-        format4_pattern = re.compile(
-            r"===FILE:\s*(.+?)\s*===\s*\n",
-            re.DOTALL,
-        )
-        markers = list(format4_pattern.finditer(response))
+        markers = list(re.finditer(r"===FILE:\s*(.+?)\s*===[ \t]*\n", response))
         for i, m in enumerate(markers):
-            rel_path = m.group(1).strip()
             start = m.end()
-            # Content goes until the next ===FILE:/===RUN:/===BACKGROUND: or end
             if i + 1 < len(markers):
                 end = markers[i + 1].start()
             else:
-                # Find next ===RUN:/===BACKGROUND: or end of string
-                next_cmd = re.search(r"\n===(RUN|BACKGROUND):", response[start:])
-                end = start + next_cmd.start() if next_cmd else len(response)
-            content = response[start:end]
-            content = _strip_content_fences(content)
-            if rel_path and content.strip() and rel_path not in written_paths:
-                if len(content.strip()) > 5:
-                    full_path = project_dir / rel_path
-                    full_path.parent.mkdir(parents=True, exist_ok=True)
-                    full_path.write_text(content)
-                    ctx.record_file(rel_path, content)
-                    console.print(f"           [dim]wrote[/dim] [white]{rel_path}[/white]")
-                    files_written += 1
-                    written_paths.add(rel_path)
+                nxt = re.search(r"\n===(RUN|BACKGROUND):", response[start:])
+                end = start + nxt.start() if nxt else len(response)
+            if _write(m.group(1), response[start:end]):
+                files_written += 1
+
+    # ── FORMAT 3 & 5: Markdown headings + code block ─────────────
+    # Catches:
+    #   ### main.py          (plain heading)
+    #   ### FILE: main.py    (FILE: prefix)
+    #   #### FILE: main.py
+    #   **main.py**
+    #   ### Updated `main.py`
+    fmt35 = re.compile(
+        r"(?:^|\n)"
+        # heading variants: ###/####/## with optional label words + optional backticks
+        r"(?:#{1,4}\s+(?:(?:FILE|Updated|Modified|File)[:\s]+)?"
+        r"[`'\"]?([a-zA-Z0-9_/.\\ -]+\.[a-zA-Z0-9]+)[`'\"]?"
+        # OR bold **filename**
+        r"|\*\*([a-zA-Z0-9_/.\\ -]+\.[a-zA-Z0-9]+)\*\*)"
+        r"[ \t]*\n+"
+        r"```\w*[ \t]*\n"
+        r"(.*?)"
+        r"\n```",
+        re.DOTALL,
+    )
+    for m in fmt35.finditer(response):
+        rel_path = (m.group(1) or m.group(2) or "").strip()
+        content = m.group(3)
+        if rel_path and "." in rel_path and len(content.strip()) > 5:
+            if _write(rel_path, content):
+                files_written += 1
 
     if files_written > 0:
         console.print(f"           [green]✓ {files_written} file(s) written to disk[/green]")
@@ -1219,6 +1218,18 @@ def _apply_run_commands(response: str, project_dir: Path) -> int:
         dangerous = ("rm -rf /", "rm -rf ~", "sudo rm", ":(){", "mkfs", "dd if=")
         if any(d in cmd.lower() for d in dangerous):
             _log("EXEC", f"  ⚠ Skipped dangerous command: {cmd}")
+            continue
+
+        # Skip commands that would launch interactive/blocking programs.
+        # The user can run those manually with /run or by typing the command.
+        _interactive_signals = (
+            "python3 main.py", "python main.py",
+            "node index.js", "node app.js", "node server.js",
+            "npm start", "yarn start", "cargo run", "go run",
+            "ruby ", "php -S",
+        )
+        if any(cmd.lower().startswith(s) for s in _interactive_signals) and cmd_type == "RUN":
+            _log("EXEC", f"  ↷ Skipped interactive program (use /run to launch): {cmd}")
             continue
 
         if cmd_type == "BACKGROUND":
