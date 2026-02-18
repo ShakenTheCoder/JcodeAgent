@@ -540,18 +540,26 @@ def _repl(
                 continue
 
         # ── Mode-based routing (non-slash input) ─────────────────
-        if mode == "agent":
-            # Agentic mode: every message triggers action
-            if _looks_like_build(user_input):
-                # Full build pipeline for new-project requests
-                ctx, project_dir = _cmd_build(user_input, ctx, project_dir, settings_mgr)
-                proj_name = ctx.state.name or project_dir.name
+        try:
+            if mode == "agent":
+                # Agentic mode: every message triggers action
+                if _looks_like_build(user_input):
+                    # Full build pipeline for new-project requests
+                    ctx, project_dir = _cmd_build(user_input, ctx, project_dir, settings_mgr)
+                    proj_name = ctx.state.name or project_dir.name
+                else:
+                    # Autonomous modify/create/fix/run
+                    _cmd_agentic(ctx, project_dir, user_input, settings_mgr)
             else:
-                # Autonomous modify/create/fix/run
-                _cmd_agentic(ctx, project_dir, user_input, settings_mgr)
-        else:
-            # Chat mode: reason, explain, search — no file changes
-            _cmd_chat(ctx, project_dir, user_input)
+                # Chat mode: reason, explain, search — no file changes
+                _cmd_chat(ctx, project_dir, user_input)
+        except KeyboardInterrupt:
+            console.print("\n[yellow]⚠ Interrupted[/yellow]")
+            continue
+        except Exception as exc:
+            console.print(f"\n[red]✗ Error: {exc}[/red]")
+            console.print("[dim]  You can try again or use /help for commands.[/dim]")
+            continue
 
 
 def _ensure_git_repo(project_dir: Path) -> None:
@@ -819,8 +827,19 @@ def _cmd_agentic(
     # Display response text (strip file and command blocks)
     display_text = response
     if files_written > 0 or commands_run > 0:
+        # Strip standard ===FILE:...===END=== blocks
         display_text = re.sub(
-            r"===FILE:.*?===END===", "", response, flags=re.DOTALL
+            r"===FILE:.*?===END===", "", display_text, flags=re.DOTALL
+        ).strip()
+        # Strip ===FILE: path=== followed by ```...``` (no ===END===)
+        display_text = re.sub(
+            r"===FILE:\s*.+?\s*===\s*\n```\w*\s*\n.*?\n```",
+            "", display_text, flags=re.DOTALL
+        ).strip()
+        # Strip ===FILE: path=== followed by bare content until next marker or end
+        display_text = re.sub(
+            r"===FILE:\s*.+?\s*===\s*\n.*?(?=\n===(?:FILE|RUN|BACKGROUND):|\Z)",
+            "", display_text, flags=re.DOTALL
         ).strip()
         display_text = re.sub(
             r"===(RUN|BACKGROUND):\s*.+?===", "", display_text, flags=re.IGNORECASE
@@ -1056,12 +1075,19 @@ def _strip_content_fences(content: str) -> str:
 
 def _apply_file_changes(response: str, project_dir: Path, ctx: ContextManager) -> int:
     """
-    Parse ===FILE: path=== ... ===END=== blocks from response and write files.
+    Parse file blocks from model response and write files.
+    Handles multiple formats that models produce:
+
+    FORMAT 1 (ideal):   ===FILE: path=== ... ===END===
+    FORMAT 2 (common):  ===FILE: path=== ```lang ... ```  (no ===END===)
+    FORMAT 3 (fallback): ### path  OR  **path**  followed by ```lang ... ```
+
     Returns count of files written.
     """
     files_written = 0
+    written_paths: set[str] = set()
 
-    # Explicit ===FILE:=== markers
+    # ── FORMAT 1: ===FILE: path=== ... ===END=== (strict) ────────
     file_blocks = re.findall(
         r"===FILE:\s*(.+?)\s*===\s*\n(.*?)===END===",
         response,
@@ -1070,14 +1096,96 @@ def _apply_file_changes(response: str, project_dir: Path, ctx: ContextManager) -
     for rel_path, content in file_blocks:
         rel_path = rel_path.strip()
         content = _strip_content_fences(content)
-        if rel_path and content:
+        if rel_path and content.strip():
             full_path = project_dir / rel_path
             full_path.parent.mkdir(parents=True, exist_ok=True)
             full_path.write_text(content)
             ctx.record_file(rel_path, content)
             console.print(f"           [dim]wrote[/dim] [white]{rel_path}[/white]")
             files_written += 1
+            written_paths.add(rel_path)
 
+    # ── FORMAT 2: ===FILE: path=== followed by ``` block (no ===END===) ──
+    # Match ===FILE: path=== then a markdown code block
+    format2_pattern = re.compile(
+        r"===FILE:\s*(.+?)\s*===\s*\n"       # ===FILE: path===
+        r"```\w*\s*\n"                         # opening fence
+        r"(.*?)"                                # content
+        r"\n```",                               # closing fence
+        re.DOTALL,
+    )
+    for m in format2_pattern.finditer(response):
+        rel_path = m.group(1).strip()
+        content = m.group(2).strip()
+        if rel_path and content and rel_path not in written_paths:
+            full_path = project_dir / rel_path
+            full_path.parent.mkdir(parents=True, exist_ok=True)
+            full_path.write_text(content)
+            ctx.record_file(rel_path, content)
+            console.print(f"           [dim]wrote[/dim] [white]{rel_path}[/white]")
+            files_written += 1
+            written_paths.add(rel_path)
+
+    # ── FORMAT 3: Markdown heading/bold with file path + code block ──
+    # Matches: ### main.py  OR  ### `main.py`  OR  **main.py**  OR  ### Modified `main.py`
+    # followed by ```lang ... ```
+    format3_pattern = re.compile(
+        r"(?:^|\n)"                                        # line start
+        r"(?:#{1,4}\s+(?:Modified\s+|Updated\s+|File[:\s]+)?"  # ### Modified / ### File:
+        r"[`\"']?([a-zA-Z0-9_/.\\-]+\.\w+)[`\"']?"       # filename with extension
+        r"|\*\*([a-zA-Z0-9_/.\\-]+\.\w+)\*\*)"            # OR **filename.ext**
+        r"\s*\n+"                                           # newlines
+        r"```\w*\s*\n"                                      # opening fence
+        r"(.*?)"                                            # content
+        r"\n```",                                           # closing fence
+        re.DOTALL,
+    )
+    for m in format3_pattern.finditer(response):
+        rel_path = (m.group(1) or m.group(2) or "").strip()
+        content = m.group(3).strip()
+        if rel_path and content and rel_path not in written_paths:
+            # Validate it looks like a real file path (has extension, reasonable length)
+            if "." in rel_path and len(rel_path) < 200 and len(content) > 10:
+                full_path = project_dir / rel_path
+                full_path.parent.mkdir(parents=True, exist_ok=True)
+                full_path.write_text(content)
+                ctx.record_file(rel_path, content)
+                console.print(f"           [dim]wrote[/dim] [white]{rel_path}[/white]")
+                files_written += 1
+                written_paths.add(rel_path)
+
+    # ── FORMAT 4: ===FILE: path=== followed by raw content (no fences, no ===END===) ──
+    # Last resort: split on ===FILE: markers and take content between them
+    if not written_paths:
+        format4_pattern = re.compile(
+            r"===FILE:\s*(.+?)\s*===\s*\n",
+            re.DOTALL,
+        )
+        markers = list(format4_pattern.finditer(response))
+        for i, m in enumerate(markers):
+            rel_path = m.group(1).strip()
+            start = m.end()
+            # Content goes until the next ===FILE:/===RUN:/===BACKGROUND: or end
+            if i + 1 < len(markers):
+                end = markers[i + 1].start()
+            else:
+                # Find next ===RUN:/===BACKGROUND: or end of string
+                next_cmd = re.search(r"\n===(RUN|BACKGROUND):", response[start:])
+                end = start + next_cmd.start() if next_cmd else len(response)
+            content = response[start:end]
+            content = _strip_content_fences(content)
+            if rel_path and content.strip() and rel_path not in written_paths:
+                if len(content.strip()) > 5:
+                    full_path = project_dir / rel_path
+                    full_path.parent.mkdir(parents=True, exist_ok=True)
+                    full_path.write_text(content)
+                    ctx.record_file(rel_path, content)
+                    console.print(f"           [dim]wrote[/dim] [white]{rel_path}[/white]")
+                    files_written += 1
+                    written_paths.add(rel_path)
+
+    if files_written > 0:
+        console.print(f"           [green]✓ {files_written} file(s) written to disk[/green]")
     return files_written
 
 

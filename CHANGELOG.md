@@ -1,5 +1,38 @@
 # Changelog
 
+## v0.9.9 — Reliability: Files Actually Get Written
+
+Critical reliability fixes discovered during real-world testing. The agent was generating correct code but never writing it to disk because models don't follow the exact output format. This release makes JCode bulletproof regardless of how the model formats its output.
+
+### Robust File Parser (THE critical fix)
+- **Multi-strategy parser**: `_apply_file_changes()` now handles 4 output formats:
+  - **Format 1**: `===FILE: path=== ... ===END===` (ideal, standard)
+  - **Format 2**: `===FILE: path===` followed by ` ```lang ... ``` ` (common model behavior — no ===END===)
+  - **Format 3**: Markdown headings (`### main.py`) or bold (`**main.py**`) followed by code blocks
+  - **Format 4**: `===FILE: path===` followed by raw content split at next marker (ultimate fallback)
+- **Confirmation message**: Shows `✓ N file(s) written to disk` after successful writes
+- **Build pipeline coder**: `_strip_fences()` in coder.py now handles models that add explanations around code blocks
+
+### Model Registry Fix
+- **Removed `qwen3-coder:8b`** — this model does not exist on Ollama (caused silent pull failures)
+- **Changed `qwen3-coder:32b` → `qwen3-coder:30b`** — the actual available model (19GB)
+- Only `qwen3-coder:30b` and `qwen3-coder:480b` exist as of June 2025
+
+### Crash Protection (KeyboardInterrupt)
+- **Ctrl+C during model streaming** no longer crashes the app — returns partial output gracefully
+- **Ctrl+C in REPL routing** caught — returns to prompt instead of stack trace
+- **General exception handling** in REPL mode dispatch — errors are displayed cleanly
+- `_stream()` in ollama_client.py: wrapped in try/except KeyboardInterrupt, shows partial output length
+
+### Strengthened System Prompts
+- **AGENTIC_SYSTEM**: Complete rewrite with explicit format rules, correct/incorrect examples, visual section separators
+- **Mode 1 (ACTION) prompt**: Stronger ===END=== requirement, explicit "no markdown fences" rule
+- Models now see concrete examples of correct vs incorrect file block formatting
+- Triple-reinforced: "Remember: ===FILE:=== then raw code then ===END===. No markdown fences inside file blocks. Ever."
+
+### Display Text Cleanup
+- Response display now strips all file block formats (not just ===END=== ones) before showing summary panel
+
 ## v0.9.8 — Simplified Two-Mode Architecture
 
 Major refactor: JCode now has a clean two-mode architecture. No more intent classification — every message goes straight to the active mode handler.

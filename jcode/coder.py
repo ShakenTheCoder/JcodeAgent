@@ -19,13 +19,23 @@ console = Console()
 
 
 def _strip_fences(text: str) -> str:
-    """Remove markdown code fences if the model wrapped output."""
+    """Remove markdown code fences if the model wrapped output.
+    Handles models that add explanations before/after the code block."""
     text = text.strip()
     # Strip <think> blocks
     text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+
+    # Try 1: entire text is a single fenced block
     m = re.match(r"^```\w*\n(.*?)```\s*$", text, re.DOTALL)
     if m:
-        return m.group(1)
+        return m.group(1).strip()
+
+    # Try 2: text has explanation + one fenced block — extract the block
+    m = re.search(r"```\w*\n(.*?)```", text, re.DOTALL)
+    if m and len(m.group(1).strip()) > len(text) * 0.3:
+        # Only use extracted block if it's a substantial portion of the text
+        return m.group(1).strip()
+
     return text
 
 

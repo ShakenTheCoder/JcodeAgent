@@ -275,6 +275,9 @@ def call_model(
             return _stream(model, messages, options)
         else:
             return _generate_silent(model, messages, options)
+    except KeyboardInterrupt:
+        console.print("\n[yellow]⚠ Interrupted[/yellow]")
+        return ""
     except Exception as e:
         err_str = str(e).lower()
         if "busy" in err_str or "timeout" in err_str or "connection" in err_str:
@@ -339,36 +342,53 @@ def _generate_silent(model: str, messages: list[dict], options: dict) -> str:
 def _stream(model: str, messages: list[dict], options: dict) -> str:
     """Stream tokens to the console and return the full text.
     Filters out <think>...</think> blocks from reasoning models.
-    Uses a lock so parallel streams don't interleave."""
+    Uses a lock so parallel streams don't interleave.
+    Handles Ctrl+C gracefully — returns partial text instead of crashing."""
     chunks: list[str] = []
     in_think = False
     is_reasoning = _is_reasoning_model(model)
+    interrupted = False
 
     with _stream_lock:
-        for chunk in ollama.chat(
-            model=model,
-            messages=messages,
-            options=options,
-            stream=True,
-        ):
-            token = chunk["message"]["content"]
-            chunks.append(token)
+        try:
+            for chunk in ollama.chat(
+                model=model,
+                messages=messages,
+                options=options,
+                stream=True,
+            ):
+                token = chunk["message"]["content"]
+                chunks.append(token)
 
-            # Filter <think> blocks from reasoning models
-            if is_reasoning:
-                if "<think>" in token:
-                    in_think = True
-                    continue
-                if "</think>" in token:
-                    in_think = False
-                    continue
-                if in_think:
-                    continue
+                # Filter <think> blocks from reasoning models
+                if is_reasoning:
+                    if "<think>" in token:
+                        in_think = True
+                        continue
+                    if "</think>" in token:
+                        in_think = False
+                        continue
+                    if in_think:
+                        continue
 
-            console.print(token, end="", highlight=False)
-        console.print()  # newline after stream
+                console.print(token, end="", highlight=False)
+        except KeyboardInterrupt:
+            interrupted = True
+            console.print("\n[yellow]⚠ Generation interrupted by user[/yellow]")
+        except Exception:
+            if not chunks:
+                raise
+            # If we already have partial output, return it rather than crashing
+            interrupted = True
+            console.print("\n[yellow]⚠ Stream interrupted[/yellow]")
+        finally:
+            console.print()  # newline after stream
 
     full_text = "".join(chunks)
     # Also strip any complete <think> blocks from the final text
     full_text = re.sub(r"<think>.*?</think>", "", full_text, flags=re.DOTALL).strip()
+
+    if interrupted and full_text:
+        console.print(f"[dim]  (partial output: {len(full_text)} chars)[/dim]")
+
     return full_text

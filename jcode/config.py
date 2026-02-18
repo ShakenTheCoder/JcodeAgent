@@ -61,16 +61,15 @@ class ModelSpec:
 MODEL_REGISTRY: list[ModelSpec] = [
     # ── CODING models (for file generation, patching) ──────────────
     # Prefer qwen3-coder (2026) > devstral > qwen2.5-coder > deepseek-coder
-    ModelSpec("qwen3-coder:32b",      "coding",    "large",  5),
+    ModelSpec("qwen3-coder:30b",      "coding",    "large",  5),
     ModelSpec("devstral:24b",          "coding",    "large",  10, supports_tools=True),
     ModelSpec("devstral-small:24b",    "coding",    "large",  15, supports_tools=True),
     ModelSpec("qwen2.5-coder:32b",    "coding",    "large",  20),
     ModelSpec("deepseek-coder:33b",    "coding",    "large",  25),
-    ModelSpec("qwen3-coder:8b",       "coding",    "small",  5),
     ModelSpec("qwen2.5-coder:14b",    "coding",    "medium", 10),
     ModelSpec("deepcoder:14b",         "coding",    "medium", 15),
-    ModelSpec("deepseek-coder:6.7b",   "coding",    "small",  12),
     ModelSpec("qwen2.5-coder:7b",     "coding",    "small",  10),
+    ModelSpec("deepseek-coder:6.7b",   "coding",    "small",  12),
 
     # ── REASONING models (for planning, analysis, deep thinking) ───
     # DeepSeek-R1 is the strongest local reasoning model

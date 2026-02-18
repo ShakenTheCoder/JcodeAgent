@@ -335,15 +335,17 @@ CRITICAL RULES:
 Output the complete fixed/modified files using EXACTLY this format:
 
 ===FILE: path/to/file.ext===
-(complete file content — every single line)
+(complete file content — every single line, raw code, NO markdown fences)
 ===END===
 
 Rules:
-- MANDATORY: use ===FILE: ...=== / ===END=== for ANY file change. Never use \
-  markdown code fences (```) for files you want to write.
+- MANDATORY: use ===FILE: ...=== / ===END=== for ANY file change.
+- MANDATORY: every ===FILE: block MUST end with ===END=== on its own line.
+- NEVER wrap file content in markdown code fences (``` or ```python etc).
+  Write raw code between ===FILE: and ===END=== markers.
 - Output the COMPLETE file — not diffs, not patches, not snippets.
 - The path must match the existing file path exactly as shown in the project.
-- For multiple files, output multiple ===FILE:=== blocks.
+- For multiple files, output multiple ===FILE:=== ... ===END=== blocks.
 - You may include a 1-2 sentence explanation, but the file blocks are the priority.
 - If an error says "Cannot find module '../models/Todo'", look at the project \
   files — if models/Todo.js is missing, CREATE it. If the path is wrong, FIX \
@@ -410,17 +412,68 @@ You have been given a REQUEST and the FULL codebase.
 Your job is to fulfill the request completely and autonomously — write files, \
 run commands, install packages, start servers, whatever is needed.
 
-CRITICAL RULES:
-1. You MUST output complete files using ===FILE: path=== ... ===END=== format.
-2. Every file you output MUST contain the COMPLETE file content — not diffs or snippets.
-3. The file path MUST match the existing path exactly, or be a new path for new files.
-4. You have ALL project files in context. READ THEM before making changes.
-5. Do NOT add unnecessary changes. Only modify what is needed.
-6. Preserve existing code style, indentation, and conventions.
-7. If you need to create new files, use ===FILE: new/path.ext=== ... ===END===.
-8. Include a brief 1-2 sentence summary of what you changed and why.
+═══════════════════════════════════════════════════════════════════
+ FILE OUTPUT FORMAT — MANDATORY
+═══════════════════════════════════════════════════════════════════
 
-COMMANDS — run shell commands autonomously:
+You MUST output files in EXACTLY this format:
+
+===FILE: path/to/file.ext===
+<complete file content here — raw code, NO markdown fences>
+===END===
+
+EXAMPLE (correct):
+===FILE: main.py===
+import sys
+
+def main():
+    print("Hello, world!")
+
+if __name__ == "__main__":
+    main()
+===END===
+
+EXAMPLE (correct, multiple files):
+===FILE: package.json===
+{
+  "name": "my-app",
+  "version": "1.0.0",
+  "scripts": { "start": "node index.js" }
+}
+===END===
+
+===FILE: index.js===
+const http = require('http');
+const server = http.createServer((req, res) => {
+  res.end('Hello');
+});
+server.listen(3000);
+===END===
+
+ABSOLUTE RULES FOR FILE BLOCKS:
+1. Every ===FILE: ...=== block MUST end with ===END=== on its own line.
+2. Do NOT wrap file content in markdown code fences (```). Write raw code only.
+3. Do NOT use ```python, ```javascript, or any other markdown fence inside file blocks.
+4. Every file block MUST contain the COMPLETE file content — never diffs or snippets.
+5. The file path MUST match the existing path exactly, or be a new path for new files.
+6. ===FILE: and ===END=== must each be on their own line, with nothing else on that line.
+
+WRONG (DO NOT DO THIS):
+===FILE: main.py===
+```python
+print("hello")
+```
+===END===
+
+CORRECT:
+===FILE: main.py===
+print("hello")
+===END===
+
+═══════════════════════════════════════════════════════════════════
+ COMMANDS — run shell commands autonomously
+═══════════════════════════════════════════════════════════════════
+
 When you need to run terminal commands (install packages, initialize projects, \
 start servers, run builds, etc.), use this format:
 
@@ -431,7 +484,6 @@ Examples:
 ===RUN: npm install express===
 ===RUN: pip install flask===
 ===RUN: python3 app.py===
-===RUN: npm start===
 
 RULES FOR COMMANDS:
 - Put ===RUN:=== blocks in the ORDER they should execute.
@@ -441,12 +493,23 @@ RULES FOR COMMANDS:
 - ALWAYS install dependencies before running: npm install, pip install, etc.
 - NEVER ask the user to run commands manually — YOU run them.
 
+═══════════════════════════════════════════════════════════════════
+ GENERAL RULES
+═══════════════════════════════════════════════════════════════════
+
+1. You have ALL project files in context. READ THEM before making changes.
+2. Do NOT add unnecessary changes. Only modify what is needed.
+3. Preserve existing code style, indentation, and conventions.
+4. Include a brief 1-2 sentence summary of what you changed and why.
+5. If you need to create new files, use ===FILE: new/path.ext=== ... ===END===.
+
 WORKFLOW for building a new project:
 1. Create all necessary files with ===FILE:=== blocks (package.json, app code, etc.)
 2. Install dependencies with ===RUN:=== blocks
 3. Start the project with ===BACKGROUND:=== (for servers) or ===RUN:=== (for scripts)
 
 You are shipping production code. Be precise. Be complete. Be autonomous.
+Remember: ===FILE:=== then raw code then ===END===. No markdown fences inside file blocks. Ever.
 """
 
 AGENTIC_TASK = """\
