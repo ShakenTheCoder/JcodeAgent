@@ -488,7 +488,136 @@
         <ul class="releases">
             <li class="release-item">
                 <div class="release-header">
-                    <span class="release-tag">v0.6.0</span>
+                    <span class="release-tag">v0.9.7</span>
+                    <span class="release-date">Feb 2026</span>
+                    <span class="release-title">Model Pull UX Improvements</span>
+                </div>
+                <div class="release-body">
+                    Fixed model pulling progress, graceful Ctrl+C handling, and accurate size estimates.
+                    <ul>
+                        <li><strong>Real Progress Tracking:</strong> Shows bytes downloaded and transfer speed (was stuck at 0%)</li>
+                        <li><strong>Graceful Cancellation:</strong> Press Ctrl+C during download to skip a model</li>
+                        <li><strong>Accurate Size Estimates:</strong> 70B=40GB, 32B=20GB, 14B=9GB, 7B=5GB</li>
+                        <li><strong>Better Feedback:</strong> "Skipped — will use fallback" when cancelled</li>
+                    </ul>
+                </div>
+            </li>
+            <li class="release-item">
+                <div class="release-header">
+                    <span class="release-tag">v0.9.6</span>
+                    <span class="release-date">Feb 2026</span>
+                    <span class="release-title">Interactive Model Pulling</span>
+                </div>
+                <div class="release-body">
+                    JCode now detects missing ideal models and offers to pull them before builds.
+                    <ul>
+                        <li><strong>Interactive Model Check:</strong> Shows table of ideal vs fallback models</li>
+                        <li><strong>User Choice:</strong> "Pull missing models now?" with Yes/No option</li>
+                        <li><strong>No Silent Fallbacks:</strong> User sees exactly what models are missing</li>
+                        <li><strong>Model Pulling:</strong> Downloads models with progress bar</li>
+                        <li><strong>Fallback Ready:</strong> If declined, continues immediately with fallback models</li>
+                    </ul>
+                </div>
+            </li>
+            <li class="release-item">
+                <div class="release-header">
+                    <span class="release-tag">v0.9.5</span>
+                    <span class="release-date">Feb 2026</span>
+                    <span class="release-title">Model Fallback Fix</span>
+                </div>
+                <div class="release-body">
+                    Critical bugfix: Model matching now requires exact names, not just base prefixes.
+                    <ul>
+                        <li><strong>Exact Model Matching:</strong> deepseek-r1:70b no longer matches deepseek-r1:14b</li>
+                        <li><strong>Smart Fallback:</strong> Falls back to available models when ideal not installed</li>
+                        <li><strong>No 404 Errors:</strong> Model selection never tries to use uninstalled models</li>
+                    </ul>
+                </div>
+            </li>
+            <li class="release-item">
+                <div class="release-header">
+                    <span class="release-tag">v0.9.4</span>
+                    <span class="release-date">Feb 2026</span>
+                    <span class="release-title">Smart Classification (LLM + Semantic Signals)</span>
+                </div>
+                <div class="release-body">
+                    LLM-based pre-classification now correctly identifies complex tasks from short prompts.
+                    <ul>
+                        <li><strong>LLM Pre-Classification:</strong> Fastest model reasons about task complexity</li>
+                        <li><strong>App-Type Signals:</strong> "Tinder for X", "Uber for Y" now recognized as heavy/large</li>
+                        <li><strong>Domain Signals:</strong> Social network, marketplace, dating app, SaaS patterns detected</li>
+                        <li><strong>Default Bias Fix:</strong> Ambiguous prompts default to medium/medium (not simple/small)</li>
+                        <li><strong>Better Model Selection:</strong> Projects get better models based on actual complexity</li>
+                    </ul>
+                </div>
+            </li>
+            <li class="release-item">
+                <div class="release-header">
+                    <span class="release-tag old">v0.9.3</span>
+                    <span class="release-date">Feb 2026</span>
+                    <span class="release-title">Fence Stripping & Execution Safety</span>
+                </div>
+                <div class="release-body">
+                    Models wrapping file content in markdown fences no longer corrupt JSON. Commands stop on failure.
+                    <ul>
+                        <li><strong>Markdown Fence Stripping:</strong> Removes ` ```json ``` ` from ===FILE:=== blocks</li>
+                        <li><strong>Stop on Failure:</strong> Commands stop executing when one fails</li>
+                        <li><strong>Node.js Detection:</strong> Auto-detects app.js, index.js, server.js entry points</li>
+                    </ul>
+                </div>
+            </li>
+            <li class="release-item">
+                <div class="release-header">
+                    <span class="release-tag old">v0.9.2</span>
+                    <span class="release-date">Feb 2026</span>
+                    <span class="release-title">Autonomous Execution</span>
+                </div>
+                <div class="release-body">
+                    Agent mode now actually executes commands and builds end-to-end.
+                    <ul>
+                        <li><strong>Command Execution:</strong> ===RUN:=== and ===BACKGROUND:=== blocks execute automatically</li>
+                        <li><strong>BUILD Intent Fix:</strong> "i want you to build..." now correctly triggers build pipeline</li>
+                        <li><strong>Agent Mode Routes:</strong> CHAT-classified input routes to agentic handler in agent mode</li>
+                        <li><strong>Safety Filters:</strong> Dangerous commands (rm -rf, mkfs, etc.) blocked</li>
+                    </ul>
+                </div>
+            </li>
+            <li class="release-item">
+                <div class="release-header">
+                    <span class="release-tag old">v0.9.1</span>
+                    <span class="release-date">Feb 2026</span>
+                    <span class="release-title">Spec Contracts, RAG Memory & Structured Errors</span>
+                </div>
+                <div class="release-body">
+                    Planner specs become contracts. Coder enforces spec compliance. Memory enables RAG retrieval.
+                    <ul>
+                        <li><strong>Spec-as-Contract:</strong> Coder enforces schema from plan, prevents stack drift</li>
+                        <li><strong>RAG Memory:</strong> Embedding-based file retrieval for context</li>
+                        <li><strong>Structured Errors:</strong> Error logs parsed and categorized</li>
+                        <li><strong>Session Persistence:</strong> Memory and size saved with project</li>
+                    </ul>
+                </div>
+            </li>
+            <li class="release-item">
+                <div class="release-header">
+                    <span class="release-tag old">v0.9.0</span>
+                    <span class="release-date">Feb 2026</span>
+                    <span class="release-title">Multi-Model Orchestrator</span>
+                </div>
+                <div class="release-body">
+                    Intelligent routing selects best local model for each role based on task complexity.
+                    <ul>
+                        <li><strong>Model Registry:</strong> ~40 models across coding, reasoning, agentic, fast categories</li>
+                        <li><strong>Task Classification:</strong> heavy/large, medium/medium, simple/small routing</li>
+                        <li><strong>ROLE_ROUTING:</strong> 9-cell matrix maps complexity×size to model category per role</li>
+                        <li><strong>Graceful Fallback:</strong> 3-phase search for best available local model</li>
+                        <li><strong>Size Threading:</strong> Context window scaled by complexity and task size</li>
+                    </ul>
+                </div>
+            </li>
+            <li class="release-item">
+                <div class="release-header">
+                    <span class="release-tag old">v0.6.0</span>
                     <span class="release-date">Feb 2026</span>
                     <span class="release-title">Parallel Generation & Smart Model Tiering</span>
                 </div>
